@@ -1,135 +1,186 @@
-// ─── Demo Routes — x402 Paywall & End-to-End Simulation ──────────────────────
+// ─── Demo Routes — Real Paywall Access + Spend Logging ───────────────────────
 import { Router } from "express";
-import { vcrPaymentMiddleware, X402_HEADERS, X402_FACILITATOR, canAgentSpend } from "@vcr-protocol/sdk";
+import {
+  vcrPaymentMiddleware,
+  X402_FACILITATOR,
+  canAgentSpend,
+} from "@vcr-protocol/sdk";
 import { getDailySpent, recordSpend } from "../models/DailySpend.js";
-import { logTransaction } from "../models/Transaction.js";
+import {
+  logTransaction,
+  getTransactionsByAgent,
+} from "../models/Transaction.js";
 import type { SpendRequest } from "@vcr-protocol/sdk";
 
 const router = Router();
 
-// USDC on Base Sepolia (6 decimals)
-const DEMO_RECIPIENT = process.env.DEMO_RECIPIENT_ADDRESS ?? "0x0000000000000000000000000000000000000000";
-const DEMO_AMOUNT = "100000"; // $0.10 USDC
-const DEMO_TOKEN = "USDC";
-const DEMO_NETWORK = "base-sepolia";
+const PAYWALL_RECIPIENT =
+  process.env.DEMO_RECIPIENT_ADDRESS ??
+  "0x0000000000000000000000000000000000000000";
+const PAYWALL_AMOUNT = "100000"; // 0.1 USDC base units (6 decimals)
+const PAYWALL_TOKEN = "USDC";
+const PAYWALL_NETWORK = "base-sepolia";
+
+function getRequestContext(req: {
+  headers: Record<string, unknown>;
+  body?: Record<string, unknown>;
+}) {
+  const ensName =
+    (req.headers["x-agent-ens"] as string | undefined) ??
+    (req.body?.ensName as string | undefined);
+
+  const amount = (req.body?.amount as string | undefined) ?? PAYWALL_AMOUNT;
+  const token = (req.body?.token as string | undefined) ?? PAYWALL_TOKEN;
+  const recipient =
+    (req.body?.recipient as string | undefined) ?? PAYWALL_RECIPIENT;
+  const chain = (req.body?.chain as string | undefined) ?? PAYWALL_NETWORK;
+
+  return {
+    ensName,
+    amount,
+    token,
+    recipient,
+    chain,
+  };
+}
 
 /**
  * GET /api/demo/content
- * A VCR-gated premium content endpoint.
- * Uses x402 payment middleware with VCR policy check.
+ * Real paywall endpoint protected by x402 middleware + live VCR policy check.
+ *
+ * Flow:
+ * 1. Client requests content without PAYMENT-SIGNATURE
+ * 2. Server responds 402 with PAYMENT-REQUIRED header
+ * 3. Client retries with PAYMENT-SIGNATURE and x-agent-ens
+ * 4. Middleware verifies payment + VCR policy
+ * 5. Route records spend and returns the protected content
  */
 router.get(
   "/content",
   vcrPaymentMiddleware({
-    amount: DEMO_AMOUNT,
-    token: DEMO_TOKEN,
-    network: DEMO_NETWORK,
-    recipient: DEMO_RECIPIENT,
+    amount: PAYWALL_AMOUNT,
+    token: PAYWALL_TOKEN,
+    network: PAYWALL_NETWORK,
+    recipient: PAYWALL_RECIPIENT,
+    facilitator: X402_FACILITATOR,
     vcrCheck: { getDailySpent },
   }),
-  (req, res) => {
-    res.json({
-      message: "🎉 Access granted — VCR policy verified & payment settled!",
-      content: {
-        title: "Alpha Research Report #42",
-        body: "This premium content was unlocked by a policy-constrained autonomous agent.",
-        timestamp: new Date().toISOString(),
-      },
-    });
-  }
+  async (req, res) => {
+    try {
+      const ensName = req.headers["x-agent-ens"] as string | undefined;
+
+      if (!ensName) {
+        return res.status(400).json({
+          error:
+            "x-agent-ens header is required after successful payment verification",
+        });
+      }
+
+      const record = await recordSpend(ensName, PAYWALL_TOKEN, PAYWALL_AMOUNT);
+
+      await logTransaction({
+        ensName,
+        type: "x402_payment",
+        amount: PAYWALL_AMOUNT,
+        token: PAYWALL_TOKEN,
+        recipient: PAYWALL_RECIPIENT,
+        chain: PAYWALL_NETWORK,
+        vcrAllowed: true,
+        status: "completed",
+      });
+
+      return res.json({
+        success: true,
+        message: "Access granted. Payment verified and spend recorded.",
+        payment: {
+          amount: PAYWALL_AMOUNT,
+          token: PAYWALL_TOKEN,
+          recipient: PAYWALL_RECIPIENT,
+          chain: PAYWALL_NETWORK,
+        },
+        daily: {
+          ensName,
+          token: PAYWALL_TOKEN,
+          amountSpent: record.amountSpent,
+        },
+        content: {
+          title: "VCR Premium Content",
+          body: "This content was delivered through the live paywall route after real backend verification.",
+          deliveredAt: new Date().toISOString(),
+        },
+      });
+    } catch (err) {
+      return res.status(500).json({ error: (err as Error).message });
+    }
+  },
 );
 
 /**
- * POST /api/demo/simulate
- * Simulate the full VCR + x402 flow without making real blockchain calls.
- * Useful for UI demos and testing.
+ * POST /api/demo/check
+ * Run a real VCR spend check against current backend state without mutating spend totals.
+ * Useful for frontend validation before attempting paywall access.
  */
-router.post("/simulate", async (req, res) => {
+router.post("/check", async (req, res) => {
   try {
-    const {
-      ensName,
-      amount = DEMO_AMOUNT,
-      token = DEMO_TOKEN,
-      recipient = DEMO_RECIPIENT,
-      chain = DEMO_NETWORK,
-    } = req.body as {
-      ensName: string;
-      amount?: string;
-      token?: string;
-      recipient?: string;
-      chain?: string;
-    };
+    const { ensName, amount, token, recipient, chain } = getRequestContext(req);
 
     if (!ensName) {
       return res.status(400).json({ error: "ensName is required" });
     }
 
-    const spendRequest: SpendRequest = { amount, token, recipient, chain };
+    const spendRequest: SpendRequest = {
+      amount,
+      token,
+      recipient,
+      chain,
+    };
 
-    // Build the simulation steps log
-    const steps: Array<{ step: number; name: string; status: "ok" | "fail"; detail?: string }> = [];
+    const result = await canAgentSpend(ensName, spendRequest, getDailySpent);
 
-    // Step 1: Agent sends request to paywall
-    steps.push({ step: 1, name: "Agent → Paywall (GET /content)", status: "ok", detail: `Requesting ${DEMO_NETWORK} resource` });
-
-    // Step 2: Server returns 402
-    steps.push({ step: 2, name: "Paywall → 402 with PAYMENT-REQUIRED", status: "ok", detail: `${amount} ${token} to ${recipient}` });
-
-    // Step 3: VCR check
-    const vcrResult = await canAgentSpend(ensName, spendRequest, getDailySpent);
-    steps.push({
-      step: 3,
-      name: "canAgentSpend() — VCR Policy Check",
-      status: vcrResult.allowed ? "ok" : "fail",
-      detail: vcrResult.allowed ? "All constraints passed" : vcrResult.reason,
+    await logTransaction({
+      ensName,
+      type: result.allowed ? "x402_payment" : "policy_violation",
+      amount,
+      token,
+      recipient,
+      chain,
+      vcrAllowed: result.allowed,
+      vcrReason: result.reason,
+      status: result.allowed ? "pending" : "rejected",
+      policyCid: result.policyCid,
     });
 
-    if (!vcrResult.allowed) {
-      return res.json({
-        success: false,
-        blockedAt: 3,
-        reason: vcrResult.reason,
-        steps,
-        policy: vcrResult.policy,
+    return res.json({
+      success: result.allowed,
+      ensName,
+      spendRequest,
+      result,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+/**
+ * POST /api/demo/settle
+ * Record a completed payment after the client has successfully passed through the paywall.
+ * This is useful if the frontend uses a custom x402 client and wants an explicit settlement log.
+ */
+router.post("/settle", async (req, res) => {
+  try {
+    const { ensName, amount, token, recipient, chain } = getRequestContext(req);
+
+    if (!ensName) {
+      return res.status(400).json({ error: "ensName is required" });
+    }
+    if (!amount || !token || !recipient || !chain) {
+      return res.status(400).json({
+        error: "ensName, amount, token, recipient, and chain are required",
       });
     }
 
-    // Step 4: EIP-3009 signature (simulated)
-    steps.push({
-      step: 4,
-      name: "Agent signs EIP-3009 TransferWithAuthorization",
-      status: "ok",
-      detail: "PAYMENT-SIGNATURE header attached",
-    });
+    const record = await recordSpend(ensName, token, amount);
 
-    // Step 5: Facilitator verify
-    steps.push({
-      step: 5,
-      name: "Facilitator /verify",
-      status: "ok",
-      detail: `${X402_FACILITATOR}/verify — signature valid, balance sufficient`,
-    });
-
-    // Step 6: Facilitator settle
-    steps.push({
-      step: 6,
-      name: "Facilitator /settle",
-      status: "ok",
-      detail: "On-chain USDC transferWithAuthorization executed",
-    });
-
-    // Step 7: Record the spend
-    await recordSpend(ensName, token, amount);
-    const newDailyTotal = await getDailySpent(ensName, token);
-
-    steps.push({
-      step: 7,
-      name: "Daily spend recorded",
-      status: "ok",
-      detail: `Cumulative today: ${newDailyTotal} ${token} base units`,
-    });
-
-    // Record the simulated transaction completion
     await logTransaction({
       ensName,
       type: "x402_payment",
@@ -139,22 +190,15 @@ router.post("/simulate", async (req, res) => {
       chain,
       vcrAllowed: true,
       status: "completed",
-      policyCid: vcrResult.policyCid,
-    });
-
-    // Step 8: Server returns 200
-    steps.push({
-      step: 8,
-      name: "Paywall → 200 with PAYMENT-RESPONSE + content",
-      status: "ok",
-      detail: "Premium content delivered",
     });
 
     return res.json({
       success: true,
-      steps,
-      policy: vcrResult.policy,
-      dailySpentAfter: newDailyTotal,
+      recorded: true,
+      ensName,
+      token,
+      amount,
+      dailySpent: record.amountSpent,
     });
   } catch (err) {
     return res.status(500).json({ error: (err as Error).message });
@@ -163,7 +207,7 @@ router.post("/simulate", async (req, res) => {
 
 /**
  * GET /api/demo/daily/:ensName/:token
- * Alias — get daily spend for a demo agent.
+ * Current daily spend total for a specific agent/token pair.
  */
 router.get("/daily/:ensName/:token", async (req, res) => {
   try {
@@ -173,6 +217,34 @@ router.get("/daily/:ensName/:token", async (req, res) => {
   } catch (err) {
     return res.status(500).json({ error: (err as Error).message });
   }
+});
+
+/**
+ * GET /api/demo/logs/:ensName
+ * Recent paywall-related transaction logs for an agent.
+ */
+router.get("/logs/:ensName", async (req, res) => {
+  try {
+    const { ensName } = req.params;
+    const logs = await getTransactionsByAgent(ensName);
+    return res.json({ ensName, logs });
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+/**
+ * GET /api/demo/config
+ * Expose active paywall configuration so the frontend can use live backend values.
+ */
+router.get("/config", (_req, res) => {
+  res.json({
+    amount: PAYWALL_AMOUNT,
+    token: PAYWALL_TOKEN,
+    recipient: PAYWALL_RECIPIENT,
+    network: PAYWALL_NETWORK,
+    facilitator: X402_FACILITATOR,
+  });
 });
 
 export default router;

@@ -1,42 +1,125 @@
-// Shared API client for VCR Protocol backend
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:3000";
+const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:3001";
 
 async function api(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
-    headers: { "Content-Type": "application/json", ...options.headers },
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
     ...options,
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
 
+  const contentType = response.headers.get("content-type") || "";
+  const isJson = contentType.includes("application/json");
+  const payload = isJson
+    ? await response.json().catch(() => null)
+    : await response.text().catch(() => "");
+
   if (!response.ok) {
-    const err = await response.json().catch(() => ({ error: response.statusText }));
-    throw new Error(err.error || `Request failed: ${response.status}`);
+    const message =
+      (payload && typeof payload === "object" && payload.error) ||
+      (typeof payload === "string" && payload) ||
+      response.statusText ||
+      `Request failed: ${response.status}`;
+    throw new Error(message);
   }
-  return response.json();
+
+  return payload;
+}
+
+async function raw(path, options = {}) {
+  return fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: {
+      ...(options.headers || {}),
+    },
+  });
 }
 
 export const vcr = {
-  // Health
+  // Health / status
   health: () => api("/api/health"),
+  status: () => api("/api/health"),
 
   // Policy
   createPolicy: (body) => api("/api/policy", { method: "POST", body }),
-  getPolicy: (ensName) => api(`/api/policy/${ensName}`),
+  getPolicy: (ensName) => api(`/api/policy/${encodeURIComponent(ensName)}`),
   setENSRecords: (body) => api("/api/policy/ens", { method: "PUT", body }),
 
   // Verify
   verify: (ensName, spendRequest) =>
     api("/api/verify", { method: "POST", body: { ensName, spendRequest } }),
   recordSpend: (ensName, token, amount) =>
-    api("/api/verify/record", { method: "POST", body: { ensName, token, amount } }),
-  getDailySpent: (ensName, token) => api(`/api/verify/daily/${ensName}/${token}`),
-  getHistory: (ensName) => api(`/api/verify/history/${ensName}`),
-  getLogs: (ensName) => api(`/api/verify/logs/${ensName}`),
+    api("/api/verify/record", {
+      method: "POST",
+      body: { ensName, token, amount },
+    }),
+  getDailySpent: (ensName, token) =>
+    api(
+      `/api/verify/daily/${encodeURIComponent(ensName)}/${encodeURIComponent(token)}`,
+    ),
+  getHistory: (ensName) =>
+    api(`/api/verify/history/${encodeURIComponent(ensName)}`),
+  getLogs: (ensName) => api(`/api/verify/logs/${encodeURIComponent(ensName)}`),
 
   // Register
   registerAgent: (body) => api("/api/register", { method: "POST", body }),
-  getAgent: (agentId) => api(`/api/register/${agentId}`),
+  getAgent: (agentId) => api(`/api/register/${encodeURIComponent(agentId)}`),
+  getAgentsByOwner: (address) =>
+    api(`/api/register/owner/${encodeURIComponent(address)}`),
 
-  // Demo
+  // Wallet
+  createWallet: (body) => api("/api/wallet", { method: "POST", body }),
+  getWallet: (walletId) => api(`/api/wallet/${encodeURIComponent(walletId)}`),
+  getWalletPolicy: (walletId) =>
+    api(`/api/wallet/${encodeURIComponent(walletId)}/policy`),
+  setWalletPolicy: (walletId, body) =>
+    api(`/api/wallet/${encodeURIComponent(walletId)}/policy`, {
+      method: "PUT",
+      body,
+    }),
+  sendWalletTransaction: (walletId, body) =>
+    api(`/api/wallet/${encodeURIComponent(walletId)}/send`, {
+      method: "POST",
+      body,
+    }),
+  approvePendingApproval: (approvalId) =>
+    api(`/api/wallet/approval/${encodeURIComponent(approvalId)}/approve`, {
+      method: "POST",
+    }),
+  rejectPendingApproval: (approvalId) =>
+    api(`/api/wallet/approval/${encodeURIComponent(approvalId)}/reject`, {
+      method: "POST",
+    }),
+
+  // Demo / paywall
   simulate: (body) => api("/api/demo/simulate", { method: "POST", body }),
+  getDemoDaily: (ensName, token) =>
+    api(
+      `/api/demo/daily/${encodeURIComponent(ensName)}/${encodeURIComponent(token)}`,
+    ),
+
+  // Raw paywall helpers
+  getPaywallContent: (headers = {}) =>
+    raw("/api/demo/content", {
+      method: "GET",
+      headers,
+    }),
+  getPaymentRequired: async (headers = {}) => {
+    const response = await raw("/api/demo/content", {
+      method: "GET",
+      headers,
+    });
+
+    return {
+      ok: response.ok,
+      status: response.status,
+      paymentRequired: response.headers.get("PAYMENT-REQUIRED"),
+      paymentResponse: response.headers.get("PAYMENT-RESPONSE"),
+      body: await response.json().catch(() => null),
+    };
+  },
 };
+
+export { API_BASE, api, raw };

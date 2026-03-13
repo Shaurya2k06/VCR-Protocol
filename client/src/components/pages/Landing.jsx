@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { vcr } from "../../lib/api";
 
 const FEATURES = [
   {
@@ -59,6 +60,12 @@ const FLOW_STEPS = [
 
 export default function Landing() {
   const canvasRef = useRef(null);
+  const [backendStatus, setBackendStatus] = useState({
+    loading: true,
+    ok: false,
+    data: null,
+    error: "",
+  });
 
   // Animated particle grid background
   useEffect(() => {
@@ -110,70 +117,390 @@ export default function Landing() {
     };
   }, []);
 
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadBackendStatus() {
+      try {
+        const data = await vcr.status();
+        if (!mounted) return;
+
+        setBackendStatus({
+          loading: false,
+          ok: true,
+          data,
+          error: "",
+        });
+      } catch (error) {
+        if (!mounted) return;
+
+        setBackendStatus({
+          loading: false,
+          ok: false,
+          data: null,
+          error: error.message || "Unable to reach backend",
+        });
+      }
+    }
+
+    loadBackendStatus();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   return (
     <div>
       {/* ── Hero ─────────────────────────────────────────────────────────── */}
-      <section style={{ position: "relative", minHeight: "100vh", display: "flex", alignItems: "center", overflow: "hidden" }}>
+      <section
+        style={{
+          position: "relative",
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          overflow: "hidden",
+        }}
+      >
         <canvas
           ref={canvasRef}
-          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}
+          style={{
+            position: "absolute",
+            inset: 0,
+            width: "100%",
+            height: "100%",
+            pointerEvents: "none",
+          }}
         />
 
         {/* Radial glow */}
-        <div style={{
-          position: "absolute", inset: 0, pointerEvents: "none",
-          background: "radial-gradient(ellipse 70% 60% at 50% 40%, rgba(99,210,255,0.07) 0%, transparent 70%)",
-        }} />
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            pointerEvents: "none",
+            background:
+              "radial-gradient(ellipse 70% 60% at 50% 40%, rgba(99,210,255,0.07) 0%, transparent 70%)",
+          }}
+        />
 
-        <div className="container" style={{ position: "relative", zIndex: 1, textAlign: "center", padding: "120px 24px 80px" }}>
+        <div
+          className="container"
+          style={{
+            position: "relative",
+            zIndex: 1,
+            textAlign: "center",
+            padding: "120px 24px 80px",
+          }}
+        >
           <div className="flex items-center justify-center gap-2 mb-6">
             <span className="badge badge-blue">v1.0 · Sepolia Testnet</span>
-            <span className="badge badge-purple">ENSIP-25 · ERC-8004 · x402</span>
+            <span className="badge badge-purple">
+              ENSIP-25 · ERC-8004 · x402
+            </span>
           </div>
 
-          <h1 style={{ fontSize: "clamp(2.8rem, 7vw, 5.5rem)", lineHeight: 1.05, marginBottom: "24px", letterSpacing: "-0.04em" }}>
-            Policy-Bound<br />
+          <h1
+            style={{
+              fontSize: "clamp(2.8rem, 7vw, 5.5rem)",
+              lineHeight: 1.05,
+              marginBottom: "24px",
+              letterSpacing: "-0.04em",
+            }}
+          >
+            Policy-Bound
+            <br />
             <span className="text-gradient">Agent Wallets</span>
           </h1>
 
-          <p style={{ fontSize: "clamp(1rem, 2.5vw, 1.25rem)", color: "var(--text-secondary)", maxWidth: 620, margin: "0 auto 40px", lineHeight: 1.7 }}>
-            The missing layer between ERC-8004 identity, ENS names, and x402 payment rails.
-            VCR lets you define, publish, and verify spending constraints for autonomous agents.
+          <p
+            style={{
+              fontSize: "clamp(1rem, 2.5vw, 1.25rem)",
+              color: "var(--text-secondary)",
+              maxWidth: 620,
+              margin: "0 auto 40px",
+              lineHeight: 1.7,
+            }}
+          >
+            The missing layer between ERC-8004 identity, ENS names, and x402
+            payment rails. VCR lets you define, publish, and verify spending
+            constraints for autonomous agents.
           </p>
 
           <div className="flex justify-center gap-3 flex-wrap">
-            <Link to="/build" className="btn btn-primary btn-lg">Build a Policy →</Link>
-            <Link to="/demo" className="btn btn-outline btn-lg">x402 Live Demo</Link>
+            <Link to="/build" className="btn btn-primary btn-lg">
+              Build a Policy →
+            </Link>
+            <Link to="/demo" className="btn btn-outline btn-lg">
+              x402 Live Demo
+            </Link>
           </div>
 
           {/* Arch preview */}
-          <div className="card" style={{ marginTop: 64, textAlign: "left", maxWidth: 720, marginLeft: "auto", marginRight: "auto" }}>
-            <p className="text-muted mono" style={{ fontSize: "0.78rem", marginBottom: 12 }}>// Architecture flow</p>
-            <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.8rem", lineHeight: 2, color: "var(--text-secondary)" }}>
-              <div><span className="text-purple">Agent Owner</span> → defines <span className="text-neon">VCR Policy JSON</span> → pins to <span className="text-amber">IPFS</span> → gets CID</div>
-              <div><span className="text-purple">Agent Owner</span> → sets ENS text record <span className="text-neon">vcr.policy</span> = ipfs://&lt;CID&gt;</div>
-              <div><span className="text-purple">Agent Owner</span> → registers agent on <span className="text-neon">ERC-8004 IdentityRegistry</span></div>
+          <div
+            className="card"
+            style={{
+              marginTop: 64,
+              textAlign: "left",
+              maxWidth: 720,
+              marginLeft: "auto",
+              marginRight: "auto",
+            }}
+          >
+            <p
+              className="text-muted mono"
+              style={{ fontSize: "0.78rem", marginBottom: 12 }}
+            >
+              // Architecture flow
+            </p>
+            <div
+              style={{
+                fontFamily: "var(--font-mono)",
+                fontSize: "0.8rem",
+                lineHeight: 2,
+                color: "var(--text-secondary)",
+              }}
+            >
+              <div>
+                <span className="text-purple">Agent Owner</span> → defines{" "}
+                <span className="text-neon">VCR Policy JSON</span> → pins to{" "}
+                <span className="text-amber">IPFS</span> → gets CID
+              </div>
+              <div>
+                <span className="text-purple">Agent Owner</span> → sets ENS text
+                record <span className="text-neon">vcr.policy</span> =
+                ipfs://&lt;CID&gt;
+              </div>
+              <div>
+                <span className="text-purple">Agent Owner</span> → registers
+                agent on{" "}
+                <span className="text-neon">ERC-8004 IdentityRegistry</span>
+              </div>
               <div style={{ height: 8 }} />
-              <div><span className="text-amber">Service</span> ← receives <span className="text-red">x402</span> payment request from agent</div>
-              <div><span className="text-amber">Service</span> → reads ENS → fetches vcr.policy → runs</div>
+              <div>
+                <span className="text-amber">Service</span> ← receives{" "}
+                <span className="text-red">x402</span> payment request from
+                agent
+              </div>
+              <div>
+                <span className="text-amber">Service</span> → reads ENS →
+                fetches vcr.policy → runs
+              </div>
               <div style={{ paddingLeft: 24 }}>
                 <span className="text-green">canAgentSpend()</span>
               </div>
-              <div style={{ paddingLeft: 48, color: "var(--neon-green)", fontSize: "0.75rem" }}>
-                ✓ amount ≤ maxTransaction &nbsp; ✓ recipient whitelisted<br />
-                ✓ cumulative ≤ dailyLimit &nbsp;&nbsp; ✓ token + chain allowed<br />
-                ✓ within allowedHours
+              <div
+                style={{
+                  paddingLeft: 48,
+                  color: "var(--neon-green)",
+                  fontSize: "0.75rem",
+                }}
+              >
+                ✓ amount ≤ maxTransaction &nbsp; ✓ recipient whitelisted
+                <br />
+                ✓ cumulative ≤ dailyLimit &nbsp;&nbsp; ✓ token + chain allowed
+                <br />✓ within allowedHours
               </div>
               <div style={{ marginTop: 8 }}>
-                If ALL pass → allow <span className="text-green">x402 payment</span> to proceed
+                If ALL pass → allow{" "}
+                <span className="text-green">x402 payment</span> to proceed
               </div>
             </div>
+          </div>
+
+          <div
+            className="card"
+            style={{
+              marginTop: 24,
+              textAlign: "left",
+              maxWidth: 720,
+              marginLeft: "auto",
+              marginRight: "auto",
+              background:
+                "linear-gradient(135deg, rgba(74,222,128,0.05), rgba(99,210,255,0.05))",
+              borderColor: backendStatus.ok
+                ? "rgba(74,222,128,0.24)"
+                : "rgba(248,113,113,0.24)",
+            }}
+          >
+            <div
+              className="flex items-center justify-between"
+              style={{ gap: 16, marginBottom: 16, flexWrap: "wrap" }}
+            >
+              <div>
+                <p
+                  className="text-muted mono"
+                  style={{ fontSize: "0.78rem", marginBottom: 8 }}
+                >
+                  // Live backend status
+                </p>
+                <h3 style={{ fontSize: "1.1rem", marginBottom: 6 }}>
+                  Backend Connectivity
+                </h3>
+                <p
+                  style={{
+                    fontSize: "0.85rem",
+                    color: "var(--text-secondary)",
+                  }}
+                >
+                  This panel checks the real API health endpoint so you can
+                  confirm the platform is actually running.
+                </p>
+              </div>
+
+              <span
+                className={`badge ${backendStatus.loading ? "badge-gray" : backendStatus.ok ? "badge-green" : "badge-red"}`}
+              >
+                {backendStatus.loading
+                  ? "Checking..."
+                  : backendStatus.ok
+                    ? "Backend Online"
+                    : "Backend Offline"}
+              </span>
+            </div>
+
+            {backendStatus.loading && (
+              <div style={{ color: "var(--text-muted)", fontSize: "0.84rem" }}>
+                Loading backend health status...
+              </div>
+            )}
+
+            {!backendStatus.loading &&
+              backendStatus.ok &&
+              backendStatus.data && (
+                <div style={{ display: "grid", gap: 10 }}>
+                  <div
+                    className="flex items-center justify-between"
+                    style={{
+                      gap: 12,
+                      borderBottom: "1px solid var(--border)",
+                      paddingBottom: 10,
+                    }}
+                  >
+                    <span
+                      style={{
+                        color: "var(--text-muted)",
+                        fontSize: "0.82rem",
+                      }}
+                    >
+                      Service
+                    </span>
+                    <span className="mono" style={{ fontSize: "0.82rem" }}>
+                      {backendStatus.data.service}
+                    </span>
+                  </div>
+                  <div
+                    className="flex items-center justify-between"
+                    style={{
+                      gap: 12,
+                      borderBottom: "1px solid var(--border)",
+                      paddingBottom: 10,
+                    }}
+                  >
+                    <span
+                      style={{
+                        color: "var(--text-muted)",
+                        fontSize: "0.82rem",
+                      }}
+                    >
+                      Status
+                    </span>
+                    <span
+                      className="mono"
+                      style={{
+                        fontSize: "0.82rem",
+                        color: "var(--neon-green)",
+                      }}
+                    >
+                      {backendStatus.data.status}
+                    </span>
+                  </div>
+                  <div
+                    className="flex items-center justify-between"
+                    style={{
+                      gap: 12,
+                      borderBottom: "1px solid var(--border)",
+                      paddingBottom: 10,
+                    }}
+                  >
+                    <span
+                      style={{
+                        color: "var(--text-muted)",
+                        fontSize: "0.82rem",
+                      }}
+                    >
+                      Database
+                    </span>
+                    <span
+                      className="mono"
+                      style={{
+                        fontSize: "0.82rem",
+                        color:
+                          backendStatus.data.db === "connected"
+                            ? "var(--neon-green)"
+                            : "var(--neon-red)",
+                      }}
+                    >
+                      {backendStatus.data.db}
+                    </span>
+                  </div>
+                  <div
+                    className="flex items-center justify-between"
+                    style={{
+                      gap: 12,
+                      borderBottom: "1px solid var(--border)",
+                      paddingBottom: 10,
+                    }}
+                  >
+                    <span
+                      style={{
+                        color: "var(--text-muted)",
+                        fontSize: "0.82rem",
+                      }}
+                    >
+                      Version
+                    </span>
+                    <span className="mono" style={{ fontSize: "0.82rem" }}>
+                      {backendStatus.data.version}
+                    </span>
+                  </div>
+                  <div
+                    className="flex items-center justify-between"
+                    style={{ gap: 12 }}
+                  >
+                    <span
+                      style={{
+                        color: "var(--text-muted)",
+                        fontSize: "0.82rem",
+                      }}
+                    >
+                      Timestamp
+                    </span>
+                    <span className="mono" style={{ fontSize: "0.82rem" }}>
+                      {backendStatus.data.timestamp}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+            {!backendStatus.loading && !backendStatus.ok && (
+              <div className="alert alert-error" style={{ marginTop: 4 }}>
+                {backendStatus.error ||
+                  "Backend is not reachable. Check that the server is running and VITE_API_URL points to the correct API."}
+              </div>
+            )}
           </div>
         </div>
       </section>
 
       {/* ── Features ──────────────────────────────────────────────────────── */}
-      <section style={{ padding: "100px 0", background: "linear-gradient(180deg, var(--bg-base), var(--bg-surface))" }}>
+      <section
+        style={{
+          padding: "100px 0",
+          background:
+            "linear-gradient(180deg, var(--bg-base), var(--bg-surface))",
+        }}
+      >
         <div className="container">
           <div className="page-header">
             <h2>Everything Between Identity & Payment</h2>
@@ -183,12 +510,22 @@ export default function Landing() {
           <div className="grid-3">
             {FEATURES.map((f) => (
               <div key={f.title} className="card" style={{ cursor: "default" }}>
-                <div style={{ fontSize: "2rem", marginBottom: 12 }}>{f.icon}</div>
+                <div style={{ fontSize: "2rem", marginBottom: 12 }}>
+                  {f.icon}
+                </div>
                 <div className="flex items-center gap-2 mb-3">
                   <h3 style={{ fontSize: "1rem" }}>{f.title}</h3>
                   <span className={`badge ${f.badgeClass}`}>{f.badge}</span>
                 </div>
-                <p style={{ fontSize: "0.875rem", color: "var(--text-secondary)", lineHeight: 1.65 }}>{f.desc}</p>
+                <p
+                  style={{
+                    fontSize: "0.875rem",
+                    color: "var(--text-secondary)",
+                    lineHeight: 1.65,
+                  }}
+                >
+                  {f.desc}
+                </p>
               </div>
             ))}
           </div>
@@ -203,18 +540,52 @@ export default function Landing() {
             <p>From policy creation to payment verification — 8 steps</p>
           </div>
 
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 12, justifyContent: "center", alignItems: "center" }}>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 12,
+              justifyContent: "center",
+              alignItems: "center",
+            }}
+          >
             {FLOW_STEPS.map((step, i) => (
               <>
-                <div key={step.label} className="card" style={{
-                  textAlign: "center", padding: "16px 20px", minWidth: 130,
-                  borderColor: `${step.color}30`,
-                }}>
-                  <div style={{ fontSize: "1.5rem", marginBottom: 6 }}>{step.icon}</div>
-                  <div style={{ fontSize: "0.75rem", color: step.color, fontFamily: "var(--font-display)", fontWeight: 600 }}>{step.label}</div>
+                <div
+                  key={step.label}
+                  className="card"
+                  style={{
+                    textAlign: "center",
+                    padding: "16px 20px",
+                    minWidth: 130,
+                    borderColor: `${step.color}30`,
+                  }}
+                >
+                  <div style={{ fontSize: "1.5rem", marginBottom: 6 }}>
+                    {step.icon}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: "0.75rem",
+                      color: step.color,
+                      fontFamily: "var(--font-display)",
+                      fontWeight: 600,
+                    }}
+                  >
+                    {step.label}
+                  </div>
                 </div>
                 {i < FLOW_STEPS.length - 1 && (
-                  <div key={`arr-${i}`} style={{ color: "var(--text-muted)", fontSize: "1.2rem", flexShrink: 0 }}>→</div>
+                  <div
+                    key={`arr-${i}`}
+                    style={{
+                      color: "var(--text-muted)",
+                      fontSize: "1.2rem",
+                      flexShrink: 0,
+                    }}
+                  >
+                    →
+                  </div>
                 )}
               </>
             ))}
@@ -225,15 +596,30 @@ export default function Landing() {
       {/* ── CTA ───────────────────────────────────────────────────────────── */}
       <section style={{ padding: "80px 0 120px", textAlign: "center" }}>
         <div className="container">
-          <div className="card" style={{ maxWidth: 640, margin: "0 auto", background: "linear-gradient(135deg, rgba(99,210,255,0.05), rgba(167,139,250,0.05))", borderColor: "rgba(99,210,255,0.2)" }}>
+          <div
+            className="card"
+            style={{
+              maxWidth: 640,
+              margin: "0 auto",
+              background:
+                "linear-gradient(135deg, rgba(99,210,255,0.05), rgba(167,139,250,0.05))",
+              borderColor: "rgba(99,210,255,0.2)",
+            }}
+          >
             <h2 style={{ marginBottom: 12 }}>Start Building on Testnet</h2>
             <p style={{ color: "var(--text-secondary)", marginBottom: 32 }}>
               Fully deployable on Sepolia + Base Sepolia. No real ETH required.
             </p>
             <div className="flex justify-center gap-3 flex-wrap">
-              <Link to="/register" className="btn btn-primary">Register Agent</Link>
-              <Link to="/verify" className="btn btn-outline">Verify Spend</Link>
-              <Link to="/explorer" className="btn btn-ghost">Policy Explorer</Link>
+              <Link to="/register" className="btn btn-primary">
+                Register Agent
+              </Link>
+              <Link to="/verify" className="btn btn-outline">
+                Verify Spend
+              </Link>
+              <Link to="/explorer" className="btn btn-ghost">
+                Policy Explorer
+              </Link>
             </div>
           </div>
         </div>

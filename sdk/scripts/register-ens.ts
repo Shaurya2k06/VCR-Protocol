@@ -181,6 +181,7 @@ const nameWrapperAbi = parseAbi([
 
 const ensRegistryAbi = parseAbi([
   "function owner(bytes32 node) view returns (address)",
+  "function setSubnodeRecord(bytes32 node, bytes32 label, address owner, address resolver, uint64 ttl) external",
 ]);
 
 // ─── Candidate base names (tried in order until one is available) ─────────────
@@ -474,25 +475,73 @@ async function main(): Promise<void> {
   } else {
     console.log(`  [3/3] Creating subdomain "${fullSubdomain}" (Tx 3)…`);
 
-    // Expiry 1 year from now (as uint64)
-    const expiryTimestamp = BigInt(
-      Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60,
+    // ── Detect whether the parent is wrapped in the NameWrapper ──────────────
+    // The Sepolia v3 ETHRegistrarController does NOT wrap names in the
+    // NameWrapper — it sets the ENS Registry owner directly to the user's
+    // wallet via ens.setRecord(). Calling NameWrapper.setSubnodeRecord on an
+    // unwrapped parent throws Unauthorised(bytes32,address) (0xb455aae8).
+    //
+    //   Wrapped   → ENS Registry owner of parent == NameWrapper address
+    //               → use NameWrapper.setSubnodeRecord(parentNode, string label, …)
+    //   Unwrapped → ENS Registry owner of parent == user wallet
+    //               → use ENS Registry.setSubnodeRecord(parentNode, bytes32 labelhash, …)
+    const parentRegistryOwner = (await publicClient.readContract({
+      address: ENS_REGISTRY,
+      abi: ensRegistryAbi,
+      functionName: "owner",
+      args: [parentNode],
+    })) as `0x${string}`;
+
+    const parentIsWrapped =
+      parentRegistryOwner.toLowerCase() === NAME_WRAPPER.toLowerCase();
+
+    console.log(`         Parent ENS owner : ${parentRegistryOwner}`);
+    console.log(
+      `         Parent is wrapped: ${parentIsWrapped ? "yes (NameWrapper)" : "no (direct — will use ENS Registry)"}`,
     );
 
-    const subTxHash = await walletClient.writeContract({
-      address: NAME_WRAPPER,
-      abi: nameWrapperAbi,
-      functionName: "setSubnodeRecord",
-      args: [
-        parentNode,
-        subdomain,
-        account.address, // owner = our wallet
-        PUBLIC_RESOLVER, // resolver
-        0n, // TTL
-        0, // fuses: none burned
-        expiryTimestamp, // expiry: 1 year
-      ],
-    });
+    let subTxHash: `0x${string}`;
+
+    if (parentIsWrapped) {
+      // ── Wrapped path: NameWrapper.setSubnodeRecord ───────────────────────
+      // Expiry 1 year from now (as uint64) — must not exceed parent expiry.
+      const expiryTimestamp = BigInt(
+        Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60,
+      );
+
+      subTxHash = await walletClient.writeContract({
+        address: NAME_WRAPPER,
+        abi: nameWrapperAbi,
+        functionName: "setSubnodeRecord",
+        args: [
+          parentNode,
+          subdomain,
+          account.address, // owner = our wallet
+          PUBLIC_RESOLVER, // resolver
+          0n, // TTL
+          0, // fuses: none burned
+          expiryTimestamp, // expiry: 1 year
+        ],
+      });
+    } else {
+      // ── Unwrapped path: ENS Registry.setSubnodeRecord ────────────────────
+      // The ENS Registry takes a bytes32 labelhash, not a string label.
+      // No fuses or expiry — plain ENS subdomain record.
+      // The caller must be the ENS Registry owner of parentNode (our wallet).
+      subTxHash = await walletClient.writeContract({
+        address: ENS_REGISTRY,
+        abi: ensRegistryAbi,
+        functionName: "setSubnodeRecord",
+        args: [
+          parentNode,
+          labelhash(subdomain) as `0x${string}`, // bytes32 labelhash of the subdomain label
+          account.address, // owner = our wallet
+          PUBLIC_RESOLVER, // resolver
+          0n, // TTL
+        ],
+      });
+    }
+
     console.log(`         tx: ${subTxHash}`);
 
     const subReceipt = await publicClient.waitForTransactionReceipt({
