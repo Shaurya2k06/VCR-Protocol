@@ -1,8 +1,9 @@
 // ─── Demo Routes — x402 Paywall & End-to-End Simulation ──────────────────────
 import { Router } from "express";
-import { vcrPaymentMiddleware, X402_HEADERS, X402_FACILITATOR, canAgentSpend } from "../sdk/index.js";
+import { vcrPaymentMiddleware, X402_HEADERS, X402_FACILITATOR, canAgentSpend } from "@vcr-protocol/sdk";
 import { getDailySpent, recordSpend } from "../models/DailySpend.js";
-import type { SpendRequest } from "../sdk/index.js";
+import { logTransaction } from "../models/Transaction.js";
+import type { SpendRequest } from "@vcr-protocol/sdk";
 
 const router = Router();
 
@@ -126,6 +127,19 @@ router.post("/simulate", async (req, res) => {
       name: "Daily spend recorded",
       status: "ok",
       detail: `Cumulative today: ${newDailyTotal} ${token} base units`,
+    });
+
+    // Record the simulated transaction completion
+    await logTransaction({
+      ensName,
+      type: "x402_payment",
+      amount,
+      token,
+      recipient,
+      chain,
+      vcrAllowed: true,
+      status: "completed",
+      policyCid: vcrResult.policyCid,
     });
 
     // Step 8: Server returns 200

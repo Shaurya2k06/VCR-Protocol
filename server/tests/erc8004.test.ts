@@ -1,6 +1,6 @@
 // ─── VCR Protocol — ERC-8004 SDK Unit Tests ──────────────────────────────────
 import { describe, it, expect } from "vitest";
-import { ERC8004_ADDRESSES, buildAgentMetadataJson } from "../src/sdk/erc8004.js";
+import { ERC8004_ADDRESSES, buildAgentMetadataJson } from "@vcr-protocol/sdk";
 
 // ─── Contract Addresses (per §3 and §11 of reference + official GitHub) ───────
 

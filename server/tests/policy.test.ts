@@ -5,8 +5,8 @@ import {
     validatePolicy,
     serializePolicy,
     computePolicyHash,
-} from "../src/sdk/policy.js";
-import type { VCRPolicy, PolicyConstraints } from "../src/sdk/types.js";
+} from "@vcr-protocol/sdk";
+import type { VCRPolicy, PolicyConstraints } from "@vcr-protocol/sdk";
 
 // ─── Test Data ────────────────────────────────────────────────────────────────
 

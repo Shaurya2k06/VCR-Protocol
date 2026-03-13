@@ -1,8 +1,9 @@
 // ─── Verify Routes — canAgentSpend() ─────────────────────────────────────────
 import { Router } from "express";
-import { canAgentSpend } from "../sdk/index.js";
+import { canAgentSpend } from "@vcr-protocol/sdk";
 import { getDailySpent, recordSpend, getSpendHistory } from "../models/DailySpend.js";
-import type { SpendRequest } from "../sdk/index.js";
+import { logTransaction, getTransactionsByAgent } from "../models/Transaction.js";
+import type { SpendRequest } from "@vcr-protocol/sdk";
 
 const router = Router();
 
@@ -27,6 +28,21 @@ router.post("/", async (req, res) => {
     }
 
     const result = await canAgentSpend(ensName, spendRequest, getDailySpent);
+
+    // Persist to audit log
+    await logTransaction({
+      ensName,
+      type: "x402_payment",
+      amount: spendRequest.amount,
+      token: spendRequest.token,
+      recipient: spendRequest.recipient,
+      chain: spendRequest.chain,
+      vcrAllowed: result.allowed,
+      vcrReason: result.reason,
+      status: result.allowed ? "pending" : "rejected",
+      policyCid: result.policyCid,
+    });
+
     return res.json({ ensName, spendRequest, result });
   } catch (err) {
     return res.status(500).json({ error: (err as Error).message });
@@ -50,6 +66,20 @@ router.post("/record", async (req, res) => {
     }
 
     const record = await recordSpend(ensName, token, amount);
+
+    // Update log status to completed
+    // (In a real app we'd find the pending one, here we just log the completion)
+    await logTransaction({
+      ensName,
+      type: "x402_payment",
+      amount,
+      token,
+      recipient: "unknown", // Usually passed in from client
+      chain: "unknown",
+      vcrAllowed: true,
+      status: "completed",
+    });
+
     return res.json({ recorded: true, ensName, token, amount, daily: record.amountSpent });
   } catch (err) {
     return res.status(500).json({ error: (err as Error).message });
@@ -79,6 +109,20 @@ router.get("/history/:ensName", async (req, res) => {
     const { ensName } = req.params;
     const history = await getSpendHistory(ensName);
     return res.json({ ensName, history });
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+/**
+ * GET /api/verify/logs/:ensName
+ * Get individual transaction logs for an agent (last 50).
+ */
+router.get("/logs/:ensName", async (req, res) => {
+  try {
+    const { ensName } = req.params;
+    const logs = await getTransactionsByAgent(ensName);
+    return res.json({ ensName, logs });
   } catch (err) {
     return res.status(500).json({ error: (err as Error).message });
   }
