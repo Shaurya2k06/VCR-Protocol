@@ -2,7 +2,10 @@ import { fetchPolicy } from "./policy.js";
 import { getVCRPolicyUri } from "./ens.js";
 import type { SpendRequest, SpendResult, VCRPolicy } from "./types.js";
 
-export type DailySpentGetter = (ensName: string, token: string) => Promise<string>;
+export type DailySpentGetter = (
+  ensName: string,
+  token: string,
+) => Promise<string>;
 
 /**
  * Core VCR verification function.
@@ -23,14 +26,17 @@ export type DailySpentGetter = (ensName: string, token: string) => Promise<strin
 export async function canAgentSpend(
   ensName: string,
   req: SpendRequest,
-  getDailySpent: DailySpentGetter
+  getDailySpent: DailySpentGetter,
 ): Promise<SpendResult> {
   // ── 1. Fetch policy URI from ENS ────────────────────────────────────────────
   let policyUri: string | null;
   try {
     policyUri = await getVCRPolicyUri(ensName);
   } catch (err) {
-    return { allowed: false, reason: `ENS lookup failed: ${(err as Error).message}` };
+    return {
+      allowed: false,
+      reason: `ENS lookup failed: ${(err as Error).message}`,
+    };
   }
 
   if (!policyUri) {
@@ -43,13 +49,22 @@ export async function canAgentSpend(
   try {
     policy = await fetchPolicy(policyUri);
   } catch (err) {
-    return { allowed: false, reason: `IPFS fetch failed: ${(err as Error).message}`, policyCid };
+    return {
+      allowed: false,
+      reason: `IPFS fetch failed: ${(err as Error).message}`,
+      policyCid,
+    };
   }
 
   // ── 3. Policy expiry check ──────────────────────────────────────────────────
   if (policy.metadata.expiresAt) {
     if (new Date() > new Date(policy.metadata.expiresAt)) {
-      return { allowed: false, reason: "Policy has expired", policy, policyCid };
+      return {
+        allowed: false,
+        reason: "Policy has expired",
+        policy,
+        policyCid,
+      };
     }
   }
 
@@ -67,7 +82,9 @@ export async function canAgentSpend(
 
   // ── 5. Recipient whitelist ──────────────────────────────────────────────────
   const normalizedRecipient = req.recipient.toLowerCase();
-  const allowedRecipients = policy.constraints.allowedRecipients.map((r) => r.toLowerCase());
+  const allowedRecipients = policy.constraints.allowedRecipients.map((r) =>
+    r.toLowerCase(),
+  );
   if (!allowedRecipients.includes(normalizedRecipient)) {
     return {
       allowed: false,
@@ -116,7 +133,12 @@ export async function canAgentSpend(
   try {
     dailySpent = await getDailySpent(ensName, req.token);
   } catch (err) {
-    return { allowed: false, reason: `Daily spend lookup failed: ${(err as Error).message}`, policy, policyCid };
+    return {
+      allowed: false,
+      reason: `Daily spend lookup failed: ${(err as Error).message}`,
+      policy,
+      policyCid,
+    };
   }
 
   const dailyLimit = BigInt(policy.constraints.dailyLimit.amount);
@@ -146,7 +168,7 @@ export async function canAgentSpend(
 export function canAgentSpendWithPolicy(
   policy: VCRPolicy,
   req: SpendRequest,
-  dailySpent: string
+  dailySpent: string,
 ): SpendResult {
   const maxTx = BigInt(policy.constraints.maxTransaction.amount);
   const reqAmount = BigInt(req.amount);
@@ -159,33 +181,63 @@ export function canAgentSpendWithPolicy(
   }
 
   if (reqAmount > maxTx) {
-    return { allowed: false, reason: `Exceeds max transaction`, policy };
+    return {
+      allowed: false,
+      reason: `Exceeds max transaction (${req.amount} > ${maxTx.toString()})`,
+      policy,
+    };
   }
 
   const normalizedRecipient = req.recipient.toLowerCase();
-  if (!policy.constraints.allowedRecipients.map(r => r.toLowerCase()).includes(normalizedRecipient)) {
-    return { allowed: false, reason: `Recipient not whitelisted`, policy };
+  if (
+    !policy.constraints.allowedRecipients
+      .map((r) => r.toLowerCase())
+      .includes(normalizedRecipient)
+  ) {
+    return {
+      allowed: false,
+      reason: `Recipient ${req.recipient} is not in the whitelist`,
+      policy,
+    };
   }
 
   if (!policy.constraints.allowedTokens.includes(req.token)) {
-    return { allowed: false, reason: `Token ${req.token} not allowed`, policy };
+    return {
+      allowed: false,
+      reason: `Token ${req.token} is not allowed. Allowed: ${policy.constraints.allowedTokens.join(", ")}`,
+      policy,
+    };
   }
 
   if (!policy.constraints.allowedChains.includes(req.chain)) {
-    return { allowed: false, reason: `Chain ${req.chain} not allowed`, policy };
+    return {
+      allowed: false,
+      reason: `Chain ${req.chain} is not allowed. Allowed: ${policy.constraints.allowedChains.join(", ")}`,
+      policy,
+    };
   }
 
   if (policy.constraints.timeRestrictions) {
     const [start, end] = policy.constraints.timeRestrictions.allowedHours;
     const utcHour = new Date().getUTCHours();
     if (utcHour < start || utcHour >= end) {
-      return { allowed: false, reason: `Outside allowed hours`, policy };
+      return {
+        allowed: false,
+        reason: `Outside allowed UTC hours: ${start}:00–${end}:00. Current UTC hour: ${utcHour}`,
+        policy,
+      };
     }
   }
 
   const dailyLimit = BigInt(policy.constraints.dailyLimit.amount);
   if (BigInt(dailySpent) + reqAmount > dailyLimit) {
-    return { allowed: false, reason: `Daily limit exceeded`, policy, dailySpentAtCheck: dailySpent };
+    const projectedSpend = BigInt(dailySpent) + reqAmount;
+    return {
+      allowed: false,
+      reason: `Daily limit exceeded (would spend ${projectedSpend.toString()}, limit is ${dailyLimit.toString()})`,
+      policy,
+      dailySpentAtCheck: dailySpent,
+    };
   }
 
   return { allowed: true, policy, dailySpentAtCheck: dailySpent };
