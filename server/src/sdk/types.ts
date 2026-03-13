@@ -33,6 +33,8 @@ export interface PolicyMetadata {
   createdBy: string;       // Owner address
   description?: string;
   expiresAt?: string;      // ISO 8601
+  /** keccak256 hash of deterministic-serialized BitGo wallet policy — for integrity checks */
+  policy_hash?: string;
 }
 
 export interface VCRPolicy {
