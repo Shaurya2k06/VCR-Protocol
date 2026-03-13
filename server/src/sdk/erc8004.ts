@@ -4,6 +4,7 @@ import {
   createWalletClient,
   http,
   parseAbi,
+  decodeEventLog,
   encodeAbiParameters,
   parseAbiParameters,
   keccak256,
@@ -55,9 +56,14 @@ function getPublicClient() {
 function getWalletClient() {
   const rpcUrl = process.env.SEPOLIA_RPC_URL;
   const privateKey = process.env.PRIVATE_KEY as `0x${string}`;
-  if (!rpcUrl || !privateKey) throw new Error("SEPOLIA_RPC_URL and PRIVATE_KEY must be set");
+  if (!rpcUrl || !privateKey)
+    throw new Error("SEPOLIA_RPC_URL and PRIVATE_KEY must be set");
   const account = privateKeyToAccount(privateKey);
-  return createWalletClient({ account, chain: sepolia, transport: http(rpcUrl) });
+  return createWalletClient({
+    account,
+    chain: sepolia,
+    transport: http(rpcUrl),
+  });
 }
 
 // ─── Registration ─────────────────────────────────────────────────────────────
@@ -73,7 +79,9 @@ export interface RegistrationResult {
  * Returns the transaction hash — agentId must be read from the event log
  * after the transaction confirms.
  */
-export async function registerAgent(agentUri: string): Promise<{ txHash: string }> {
+export async function registerAgent(
+  agentUri: string,
+): Promise<{ txHash: string }> {
   const walletClient = getWalletClient();
 
   const txHash = await walletClient.writeContract({
@@ -89,12 +97,16 @@ export async function registerAgent(agentUri: string): Promise<{ txHash: string 
 /**
  * Wait for a registration transaction and return the agentId from the event.
  */
-export async function waitForAgentRegistration(txHash: string): Promise<RegistrationResult> {
+export async function waitForAgentRegistration(
+  txHash: string,
+): Promise<RegistrationResult> {
   const publicClient = getPublicClient();
 
-  const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash as `0x${string}` });
+  const receipt = await publicClient.waitForTransactionReceipt({
+    hash: txHash as `0x${string}`,
+  });
 
-  // Parse the AgentRegistered event from logs
+  // Parse the AgentRegistered event from log using viem's decodeEventLog and the ABIs
   // Event: AgentRegistered(uint256 indexed agentId, address indexed owner, string agentURI)
   // topics[0] = event signature hash, topics[1] = agentId, topics[2] = owner
   for (const log of receipt.logs) {
@@ -133,7 +145,7 @@ export async function getAgentOwner(agentId: number): Promise<Address> {
 export async function setAgentMetadata(
   agentId: number,
   key: string,
-  value: string
+  value: string,
 ): Promise<string> {
   const walletClient = getWalletClient();
 
@@ -154,7 +166,7 @@ export async function setAgentMetadata(
 export async function setAgentWallet(
   agentId: number,
   newWallet: Address,
-  deadlineSeconds = 300
+  deadlineSeconds = 300,
 ): Promise<string> {
   const walletClient = getWalletClient();
   const account = privateKeyToAccount(process.env.PRIVATE_KEY as `0x${string}`);
@@ -186,7 +198,12 @@ export async function setAgentWallet(
     deadline,
   };
 
-  const signature = await walletClient.signTypedData({ domain, types, primaryType: "AgentWalletSet", message });
+  const signature = await walletClient.signTypedData({
+    domain,
+    types,
+    primaryType: "AgentWalletSet",
+    message,
+  });
 
   const txHash = await walletClient.writeContract({
     address: ERC8004_ADDRESSES.identityRegistry.sepolia,
@@ -209,16 +226,19 @@ export interface ReputationSummary {
 /**
  * Get the reputation summary for an agent.
  */
-export async function getAgentReputation(agentId: number): Promise<ReputationSummary> {
+export async function getAgentReputation(
+  agentId: number,
+): Promise<ReputationSummary> {
   const publicClient = getPublicClient();
-  const [totalScore, count] = await publicClient.readContract({
+  const [totalScore, count] = (await publicClient.readContract({
     address: ERC8004_ADDRESSES.reputationRegistry.sepolia,
     abi: reputationRegistryAbi,
     functionName: "getSummary",
     args: [BigInt(agentId)],
-  }) as [bigint, bigint];
+  })) as [bigint, bigint];
 
-  const averageScore = count > 0n ? Number(totalScore) / Number(count) / 1e18 : 0;
+  const averageScore =
+    count > 0n ? Number(totalScore) / Number(count) / 1e18 : 0;
   return { totalScore, count, averageScore };
 }
 
@@ -229,7 +249,7 @@ export function buildAgentMetadataJson(
   meta: Omit<AgentMetadata, "type">,
   registryAddress: string,
   agentId: number,
-  chainId = 11155111
+  chainId = 11155111,
 ): AgentMetadata {
   return {
     type: "autonomous-agent",

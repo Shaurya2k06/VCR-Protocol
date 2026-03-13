@@ -24,24 +24,30 @@ function getBitGo(): BitGoAPI {
  * IMPORTANT: userKeychain.prv is returned ONLY ONCE — store it securely.
  * IMPORTANT: Fund the enterprise gas tank BEFORE calling this.
  */
-export async function createAgentWallet(label: string): Promise<BitGoWalletResult> {
+export async function createAgentWallet(
+  label: string,
+): Promise<BitGoWalletResult> {
   const bitgo = getBitGo();
   const enterpriseId = process.env.BITGO_ENTERPRISE_ID;
   const passphrase = process.env.BITGO_WALLET_PASSPHRASE;
   if (!enterpriseId || !passphrase) {
-    throw new Error("BITGO_ENTERPRISE_ID and BITGO_WALLET_PASSPHRASE must be set");
+    throw new Error(
+      "BITGO_ENTERPRISE_ID and BITGO_WALLET_PASSPHRASE must be set",
+    );
   }
 
   const result = await bitgo.coin("hteth").wallets().generateWallet({
     label,
     passphrase,
     enterprise: enterpriseId,
-    walletVersion: 3,          // MUST be v3 for hackathon accounts
-    multisigType: "onchain",   // NOT 'tss' — TSS requires support contact
+    walletVersion: 3, // MUST be v3 for hackathon accounts
+    multisigType: "onchain", // NOT 'tss' — TSS requires support contact
   });
 
   const walletId = result.wallet.id();
-  const coinSpecific = result.wallet.coinSpecific() as Record<string, unknown> | undefined;
+  const coinSpecific = result.wallet.coinSpecific() as
+    | Record<string, unknown>
+    | undefined;
   const pendingChainInitialization =
     (coinSpecific?.pendingChainInitialization as boolean) ?? false;
 
@@ -49,7 +55,7 @@ export async function createAgentWallet(label: string): Promise<BitGoWalletResul
 
   return {
     walletId,
-    receiveAddress: (walletJson.receiveAddress as any)?.address ?? "",
+    receiveAddress: (walletJson.receiveAddress as any)?.() ?? "",
     userKeyEncrypted: result.userKeychain?.encryptedPrv ?? "",
     pendingChainInitialization,
   };
@@ -86,7 +92,7 @@ export async function getWalletPolicy(walletId: string): Promise<unknown> {
  */
 export async function setWalletPolicy(
   walletId: string,
-  policy: BitGoPolicy
+  policy: BitGoPolicy,
 ): Promise<unknown> {
   const bitgo = getBitGo();
   const wallet = await bitgo.coin("hteth").wallets().get({ id: walletId });
@@ -151,7 +157,7 @@ export interface SendResult {
 export async function sendTransaction(
   walletId: string,
   recipientAddress: string,
-  amountWei: string
+  amountWei: string,
 ): Promise<SendResult> {
   const bitgo = getBitGo();
   const passphrase = process.env.BITGO_WALLET_PASSPHRASE;
@@ -159,32 +165,44 @@ export async function sendTransaction(
 
   const wallet = await bitgo.coin("hteth").wallets().get({ id: walletId });
 
-  const result = await wallet.sendMany({
+  const result = (await wallet.sendMany({
     recipients: [{ address: recipientAddress, amount: amountWei }],
     walletPassphrase: passphrase,
-  }) as Record<string, unknown>;
+  })) as Record<string, unknown>;
 
   if (result.txid) {
     return { txid: result.txid as string, status: "confirmed" };
   }
   if (result.pendingApproval) {
-    return { pendingApproval: result.pendingApproval as string, status: "pending_approval" };
+    return {
+      pendingApproval: result.pendingApproval as string,
+      status: "pending_approval",
+    };
   }
   return { status: "pending_approval" };
 }
 
 // ─── Pending Approvals ────────────────────────────────────────────────────────
 
-export async function approvePendingApproval(approvalId: string): Promise<unknown> {
+export async function approvePendingApproval(
+  approvalId: string,
+): Promise<unknown> {
   const bitgo = getBitGo();
   // OTP for test env is EXACTLY 7 zeroes
   return (bitgo as any)
     .pendingApprovals()
     .get({ id: approvalId })
-    .then((approval: any) => approval.approve({ walletPassphrase: process.env.BITGO_WALLET_PASSPHRASE, otp: "0000000" }));
+    .then((approval: any) =>
+      approval.approve({
+        walletPassphrase: process.env.BITGO_WALLET_PASSPHRASE,
+        otp: "0000000",
+      }),
+    );
 }
 
-export async function rejectPendingApproval(approvalId: string): Promise<unknown> {
+export async function rejectPendingApproval(
+  approvalId: string,
+): Promise<unknown> {
   const bitgo = getBitGo();
   return (bitgo as any)
     .pendingApprovals()
@@ -196,12 +214,13 @@ export async function rejectPendingApproval(approvalId: string): Promise<unknown
  * Verify a BitGo webhook HMAC signature.
  * Token is found in X-Signature header of the webhook request.
  */
-export function verifyWebhookSignature(
+export async function verifyWebhookSignature(
   payload: string,
   signature: string,
-  secret: string
-): boolean {
-  const hmac = createHmac("sha256", secret);
+  secret: string,
+): Promise<boolean> {
+  const crypto = await import("crypto");
+  const hmac = crypto.createHmac("sha256", secret);
   hmac.update(payload);
   const expected = hmac.digest("hex");
   // Constant-time comparison to prevent timing attacks
