@@ -9,8 +9,8 @@ import {
     approvePendingApproval,
     rejectPendingApproval,
     verifyWebhookSignature,
-} from "../sdk/index.js";
-import type { BitGoPolicy } from "../sdk/index.js";
+} from "@vcr-protocol/sdk";
+import type { BitGoPolicy } from "@vcr-protocol/sdk";
 import { updateAgentWallet } from "../models/Agent.js";
 import { logTransaction } from "../models/Transaction.js";
 

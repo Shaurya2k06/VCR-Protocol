@@ -9,8 +9,8 @@ import {
   setAgentRegistrationRecord,
   setAllENSRecords,
   getVCRPolicyUri,
-} from "../sdk/index.js";
-import type { PolicyConstraints, PolicyMetadata } from "../sdk/index.js";
+} from "@vcr-protocol/sdk";
+import type { PolicyConstraints, PolicyMetadata } from "@vcr-protocol/sdk";
 
 const router = Router();
 

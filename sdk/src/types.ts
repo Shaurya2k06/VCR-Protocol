@@ -65,6 +65,8 @@ export interface SpendResult {
   allowed: boolean;
   reason?: string;
   policy?: VCRPolicy;
+  /** CID of the policy (if fetched) */
+  policyCid?: string;
   /** The aggregated daily spend amount (base units) at time of check */
   dailySpentAtCheck?: string;
 }

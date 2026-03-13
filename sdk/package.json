@@ -1,0 +1,90 @@
+{
+    "name": "@vcr-protocol/sdk",
+    "version": "1.0.0",
+    "description": "VCR Protocol SDK — Policy-bound autonomous agent wallets with on-chain verification, ENS integration, x402 payments, and BitGo enforcement.",
+    "type": "module",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "exports": {
+        ".": {
+            "import": "./dist/index.js",
+            "types": "./dist/index.d.ts"
+        },
+        "./types": {
+            "import": "./dist/types.js",
+            "types": "./dist/types.d.ts"
+        },
+        "./policy": {
+            "import": "./dist/policy.js",
+            "types": "./dist/policy.d.ts"
+        },
+        "./verifier": {
+            "import": "./dist/verifier.js",
+            "types": "./dist/verifier.d.ts"
+        },
+        "./ens": {
+            "import": "./dist/ens.js",
+            "types": "./dist/ens.d.ts"
+        },
+        "./erc8004": {
+            "import": "./dist/erc8004.js",
+            "types": "./dist/erc8004.d.ts"
+        },
+        "./contract": {
+            "import": "./dist/contract.js",
+            "types": "./dist/contract.d.ts"
+        },
+        "./bitgo": {
+            "import": "./dist/bitgo.js",
+            "types": "./dist/bitgo.d.ts"
+        },
+        "./x402": {
+            "import": "./dist/x402.js",
+            "types": "./dist/x402.d.ts"
+        }
+    },
+    "files": [
+        "dist",
+        "README.md"
+    ],
+    "scripts": {
+        "build": "tsc -p tsconfig.json",
+        "clean": "rm -rf dist",
+        "prepublishOnly": "npm run build",
+        "lint": "tsc --noEmit"
+    },
+    "keywords": [
+        "vcr",
+        "erc-8004",
+        "ensip-25",
+        "x402",
+        "bitgo",
+        "agent",
+        "policy",
+        "wallet",
+        "ethereum",
+        "sepolia"
+    ],
+    "author": "VCR Protocol",
+    "license": "MIT",
+    "dependencies": {
+        "@bitgo/sdk-api": "^1.63.0",
+        "@bitgo/sdk-coin-eth": "^25.0.0",
+        "json-stringify-deterministic": "^1.0.12",
+        "pinata": "^2.5.5",
+        "viem": "^2.31.3"
+    },
+    "peerDependencies": {
+        "express": ">=4.0.0"
+    },
+    "peerDependenciesMeta": {
+        "express": {
+            "optional": true
+        }
+    },
+    "devDependencies": {
+        "@types/express": "^5.0.0",
+        "@types/node": "^22.0.0",
+        "typescript": "^5.8.3"
+    }
+}

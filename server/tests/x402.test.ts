@@ -4,7 +4,7 @@ import {
     X402_HEADERS,
     X402_FACILITATOR,
     buildEIP3009TypedData,
-} from "../src/sdk/x402.js";
+} from "@vcr-protocol/sdk";
 
 // ─── Header Constants (per §2 correction #10 — V2, no X- prefix) ─────────────
 

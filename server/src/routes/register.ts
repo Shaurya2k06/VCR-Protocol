@@ -9,8 +9,8 @@ import {
   pinPolicy,
   setAllENSRecords,
   ERC8004_ADDRESSES,
-} from "../sdk/index.js";
-import type { AgentMetadata, VCRPolicy } from "../sdk/index.js";
+} from "@vcr-protocol/sdk";
+import type { AgentMetadata, VCRPolicy } from "@vcr-protocol/sdk";
 import { PinataSDK } from "pinata";
 import { saveAgent, getAgentByChainId, getAgentsByOwner } from "../models/Agent.js";
 import { privateKeyToAccount } from "viem/accounts";

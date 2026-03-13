@@ -39,16 +39,17 @@ export async function canAgentSpend(
 
   // ── 2. Fetch policy JSON from IPFS ──────────────────────────────────────────
   let policy: VCRPolicy;
+  const policyCid = policyUri.replace(/^ipfs:\/\//, "");
   try {
     policy = await fetchPolicy(policyUri);
   } catch (err) {
-    return { allowed: false, reason: `IPFS fetch failed: ${(err as Error).message}` };
+    return { allowed: false, reason: `IPFS fetch failed: ${(err as Error).message}`, policyCid };
   }
 
   // ── 3. Policy expiry check ──────────────────────────────────────────────────
   if (policy.metadata.expiresAt) {
     if (new Date() > new Date(policy.metadata.expiresAt)) {
-      return { allowed: false, reason: "Policy has expired", policy };
+      return { allowed: false, reason: "Policy has expired", policy, policyCid };
     }
   }
 
@@ -60,6 +61,7 @@ export async function canAgentSpend(
       allowed: false,
       reason: `Exceeds max transaction (${req.amount} > ${maxTx.toString()})`,
       policy,
+      policyCid,
     };
   }
 
@@ -71,6 +73,7 @@ export async function canAgentSpend(
       allowed: false,
       reason: `Recipient ${req.recipient} is not in the whitelist`,
       policy,
+      policyCid,
     };
   }
 
@@ -80,6 +83,7 @@ export async function canAgentSpend(
       allowed: false,
       reason: `Token ${req.token} is not allowed. Allowed: ${policy.constraints.allowedTokens.join(", ")}`,
       policy,
+      policyCid,
     };
   }
 
@@ -89,6 +93,7 @@ export async function canAgentSpend(
       allowed: false,
       reason: `Chain ${req.chain} is not allowed. Allowed: ${policy.constraints.allowedChains.join(", ")}`,
       policy,
+      policyCid,
     };
   }
 
@@ -101,6 +106,7 @@ export async function canAgentSpend(
         allowed: false,
         reason: `Outside allowed UTC hours: ${start}:00–${end}:00. Current UTC hour: ${utcHour}`,
         policy,
+        policyCid,
       };
     }
   }
@@ -110,7 +116,7 @@ export async function canAgentSpend(
   try {
     dailySpent = await getDailySpent(ensName, req.token);
   } catch (err) {
-    return { allowed: false, reason: `Daily spend lookup failed: ${(err as Error).message}`, policy };
+    return { allowed: false, reason: `Daily spend lookup failed: ${(err as Error).message}`, policy, policyCid };
   }
 
   const dailyLimit = BigInt(policy.constraints.dailyLimit.amount);
@@ -120,6 +126,7 @@ export async function canAgentSpend(
       allowed: false,
       reason: `Daily limit exceeded (would spend ${projectedSpend.toString()}, limit is ${dailyLimit.toString()})`,
       policy,
+      policyCid,
       dailySpentAtCheck: dailySpent,
     };
   }
@@ -127,6 +134,7 @@ export async function canAgentSpend(
   return {
     allowed: true,
     policy,
+    policyCid,
     dailySpentAtCheck: dailySpent,
   };
 }

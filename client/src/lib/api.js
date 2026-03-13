@@ -1,5 +1,5 @@
 // Shared API client for VCR Protocol backend
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:3001";
+const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
 async function api(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -31,6 +31,7 @@ export const vcr = {
     api("/api/verify/record", { method: "POST", body: { ensName, token, amount } }),
   getDailySpent: (ensName, token) => api(`/api/verify/daily/${ensName}/${token}`),
   getHistory: (ensName) => api(`/api/verify/history/${ensName}`),
+  getLogs: (ensName) => api(`/api/verify/logs/${ensName}`),
 
   // Register
   registerAgent: (body) => api("/api/register", { method: "POST", body }),

@@ -5,7 +5,7 @@ import {
     buildAgentRegistrationKey,
     ENS_ADDRESSES,
     ERC8004_REGISTRY_SEPOLIA,
-} from "../src/sdk/ens.js";
+} from "@vcr-protocol/sdk";
 
 // ─── ERC-7930 Encoding ────────────────────────────────────────────────────────
 // Validated against official ENSIP-25 worked example:

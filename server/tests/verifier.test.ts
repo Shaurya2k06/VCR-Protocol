@@ -1,7 +1,7 @@
 // ─── VCR Protocol — Verifier Unit Tests ───────────────────────────────────────
 import { describe, it, expect } from "vitest";
-import { canAgentSpendWithPolicy } from "../src/sdk/verifier.js";
-import type { VCRPolicy, SpendRequest } from "../src/sdk/types.js";
+import { canAgentSpendWithPolicy } from "@vcr-protocol/sdk";
+import type { VCRPolicy, SpendRequest } from "@vcr-protocol/sdk";
 
 // ─── Test Data ────────────────────────────────────────────────────────────────
 
