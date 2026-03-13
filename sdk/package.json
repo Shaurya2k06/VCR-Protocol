@@ -1,6 +1,6 @@
 {
     "name": "@shaurya2k06/vcrsdk",
-    "version": "1.0.2",
+    "version": "1.1.0",
     "description": "VCR Protocol SDK — Policy-bound autonomous agent wallets with on-chain verification, ENS integration, x402 payments, and BitGo enforcement.",
     "type": "module",
     "main": "dist/index.js",
@@ -54,7 +54,12 @@
         "build": "tsc -p tsconfig.json",
         "clean": "rm -rf dist",
         "prepublishOnly": "npm run build",
-        "lint": "tsc --noEmit"
+        "lint": "tsc --noEmit",
+        "test": "vitest run",
+        "test:watch": "vitest",
+        "test:coverage": "vitest run --coverage",
+        "demo": "tsx scripts/demo.ts",
+        "setup": "tsx scripts/setup-agent.ts"
     },
     "keywords": [
         "vcr",
@@ -88,6 +93,9 @@
     "devDependencies": {
         "@types/express": "^5.0.0",
         "@types/node": "^22.0.0",
-        "typescript": "^5.8.3"
+        "dotenv": "^16.6.1",
+        "tsx": "^4.21.0",
+        "typescript": "^5.8.3",
+        "vitest": "^3.2.4"
     }
 }

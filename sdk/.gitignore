@@ -1,4 +1,36 @@
-node_modules/
-node_modules
+# ─── Build output ─────────────────────────────────────────────────────────────
 dist/
 dist
+
+# ─── Dependencies ─────────────────────────────────────────────────────────────
+node_modules/
+node_modules
+
+# ─── Environment (secrets) ────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ─── Agent records (per-agent data — contains passphrases) ───────────────────
+# agents/<name>.json contains walletPassphrase — never commit
+# agents/<name>.key  contains plaintext BitGo user private key — never commit
+agents/
+
+# ─── BitGo key files ──────────────────────────────────────────────────────────
+*.key
+
+# ─── TypeScript cache ─────────────────────────────────────────────────────────
+*.tsbuildinfo
+
+# ─── Test / coverage output ───────────────────────────────────────────────────
+coverage/
+.nyc_output/
+
+# ─── macOS ────────────────────────────────────────────────────────────────────
+.DS_Store
+
+# ─── Editor ───────────────────────────────────────────────────────────────────
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
