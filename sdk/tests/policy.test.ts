@@ -19,17 +19,19 @@ import type { VCRPolicy, VCRConstraints } from "../src/types.js";
 
 const RECIPIENT_A = "0xaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaA";
 const RECIPIENT_B = "0xbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBb";
-const UNKNOWN     = "0x1234567890123456789012345678901234567890";
+const UNKNOWN = "0x1234567890123456789012345678901234567890";
 
 const AGENT_ID = "eip155:11155111:0x8004A818BFB912233c491871b3d84c89A494BD9e:0";
 
-function baseConstraints(overrides: Partial<VCRConstraints> = {}): VCRConstraints {
+function baseConstraints(
+  overrides: Partial<VCRConstraints> = {},
+): VCRConstraints {
   return {
-    maxTransaction: { amount: "1000000", token: "USDC", chain: "base-sepolia" },  // $1.00
-    dailyLimit:     { amount: "5000000", token: "USDC", chain: "base-sepolia" },  // $5.00
+    maxTransaction: { amount: "1000000", token: "USDC", chain: "base-sepolia" }, // $1.00
+    dailyLimit: { amount: "5000000", token: "USDC", chain: "base-sepolia" }, // $5.00
     allowedRecipients: [RECIPIENT_A, RECIPIENT_B],
-    allowedTokens:     ["USDC"],
-    allowedChains:     ["base-sepolia"],
+    allowedTokens: ["USDC"],
+    allowedChains: ["base-sepolia"],
     ...overrides,
   };
 }
@@ -62,10 +64,21 @@ describe("createPolicy", () => {
 
   it("throws when maxTransaction exceeds dailyLimit", () => {
     expect(() =>
-      createPolicy(AGENT_ID, baseConstraints({
-        maxTransaction: { amount: "9999999", token: "USDC", chain: "base-sepolia" },
-        dailyLimit:     { amount: "1000000", token: "USDC", chain: "base-sepolia" },
-      })),
+      createPolicy(
+        AGENT_ID,
+        baseConstraints({
+          maxTransaction: {
+            amount: "9999999",
+            token: "USDC",
+            chain: "base-sepolia",
+          },
+          dailyLimit: {
+            amount: "1000000",
+            token: "USDC",
+            chain: "base-sepolia",
+          },
+        }),
+      ),
     ).toThrow(/maxTransaction cannot exceed dailyLimit/);
   });
 
@@ -114,25 +127,34 @@ describe("validatePolicy", () => {
 
   it("rejects timeRestrictions start >= end", () => {
     expect(() =>
-      createPolicy(AGENT_ID, baseConstraints({
-        timeRestrictions: { timezone: "UTC", allowedHours: [17, 9] },
-      })),
+      createPolicy(
+        AGENT_ID,
+        baseConstraints({
+          timeRestrictions: { timezone: "UTC", allowedHours: [17, 9] },
+        }),
+      ),
     ).toThrow(/start must be before end/);
   });
 
   it("rejects timeRestrictions start < 0", () => {
     expect(() =>
-      createPolicy(AGENT_ID, baseConstraints({
-        timeRestrictions: { timezone: "UTC", allowedHours: [-1, 9] },
-      })),
+      createPolicy(
+        AGENT_ID,
+        baseConstraints({
+          timeRestrictions: { timezone: "UTC", allowedHours: [-1, 9] },
+        }),
+      ),
     ).toThrow(/start must be in range/);
   });
 
   it("rejects timeRestrictions end > 24", () => {
     expect(() =>
-      createPolicy(AGENT_ID, baseConstraints({
-        timeRestrictions: { timezone: "UTC", allowedHours: [9, 25] },
-      })),
+      createPolicy(
+        AGENT_ID,
+        baseConstraints({
+          timeRestrictions: { timezone: "UTC", allowedHours: [9, 25] },
+        }),
+      ),
     ).toThrow(/end must be in range/);
   });
 });
@@ -155,11 +177,11 @@ describe("serializePolicy", () => {
     const p1 = makePolicy();
     // Construct same constraints with keys in different insertion order
     const constraints2: VCRConstraints = {
-      allowedChains:     [...p1.constraints.allowedChains],
-      allowedTokens:     [...p1.constraints.allowedTokens],
+      allowedChains: [...p1.constraints.allowedChains],
+      allowedTokens: [...p1.constraints.allowedTokens],
       allowedRecipients: [...p1.constraints.allowedRecipients],
-      dailyLimit:        { ...p1.constraints.dailyLimit },
-      maxTransaction:    { ...p1.constraints.maxTransaction },
+      dailyLimit: { ...p1.constraints.dailyLimit },
+      maxTransaction: { ...p1.constraints.maxTransaction },
     };
     const p2 = createPolicy(AGENT_ID, constraints2, {
       createdBy: p1.metadata.createdBy,
@@ -185,7 +207,11 @@ describe("computePolicyHash", () => {
   it("differs for policies with different constraints", () => {
     const p1 = makePolicy();
     const p2 = makePolicy({
-      maxTransaction: { amount: "2000000", token: "USDC", chain: "base-sepolia" },
+      maxTransaction: {
+        amount: "2000000",
+        token: "USDC",
+        chain: "base-sepolia",
+      },
     });
     expect(computePolicyHash(p1)).not.toBe(computePolicyHash(p2));
   });
@@ -206,7 +232,12 @@ describe("canAgentSpendWithPolicy", () => {
     const policy = makePolicy();
     const result = canAgentSpendWithPolicy(
       policy,
-      { amount: "500000", token: "USDC", recipient: RECIPIENT_A, chain: "base-sepolia" },
+      {
+        amount: "500000",
+        token: "USDC",
+        recipient: RECIPIENT_A,
+        chain: "base-sepolia",
+      },
       "0",
     );
     expect(result.allowed).toBe(true);
@@ -217,7 +248,12 @@ describe("canAgentSpendWithPolicy", () => {
     const policy = makePolicy();
     const result = canAgentSpendWithPolicy(
       policy,
-      { amount: "2000000", token: "USDC", recipient: RECIPIENT_A, chain: "base-sepolia" },
+      {
+        amount: "2000000",
+        token: "USDC",
+        recipient: RECIPIENT_A,
+        chain: "base-sepolia",
+      },
       "0",
     );
     expect(result.allowed).toBe(false);
@@ -228,7 +264,12 @@ describe("canAgentSpendWithPolicy", () => {
     const policy = makePolicy();
     const result = canAgentSpendWithPolicy(
       policy,
-      { amount: "1000001", token: "USDC", recipient: RECIPIENT_A, chain: "base-sepolia" },
+      {
+        amount: "1000001",
+        token: "USDC",
+        recipient: RECIPIENT_A,
+        chain: "base-sepolia",
+      },
       "0",
     );
     expect(result.allowed).toBe(false);
@@ -238,7 +279,12 @@ describe("canAgentSpendWithPolicy", () => {
     const policy = makePolicy();
     const result = canAgentSpendWithPolicy(
       policy,
-      { amount: "1000000", token: "USDC", recipient: RECIPIENT_A, chain: "base-sepolia" },
+      {
+        amount: "1000000",
+        token: "USDC",
+        recipient: RECIPIENT_A,
+        chain: "base-sepolia",
+      },
       "0",
     );
     expect(result.allowed).toBe(true);
@@ -248,11 +294,16 @@ describe("canAgentSpendWithPolicy", () => {
     const policy = makePolicy();
     const result = canAgentSpendWithPolicy(
       policy,
-      { amount: "100000", token: "USDC", recipient: UNKNOWN, chain: "base-sepolia" },
+      {
+        amount: "100000",
+        token: "USDC",
+        recipient: UNKNOWN,
+        chain: "base-sepolia",
+      },
       "0",
     );
     expect(result.allowed).toBe(false);
-    expect(result.reason).toMatch(/not whitelisted/i);
+    expect(result.reason).toMatch(/not in the whitelist/i);
   });
 
   it("is case-insensitive for recipient addresses", () => {
@@ -274,7 +325,12 @@ describe("canAgentSpendWithPolicy", () => {
     const policy = makePolicy();
     const result = canAgentSpendWithPolicy(
       policy,
-      { amount: "100000", token: "DAI", recipient: RECIPIENT_A, chain: "base-sepolia" },
+      {
+        amount: "100000",
+        token: "DAI",
+        recipient: RECIPIENT_A,
+        chain: "base-sepolia",
+      },
       "0",
     );
     expect(result.allowed).toBe(false);
@@ -285,7 +341,12 @@ describe("canAgentSpendWithPolicy", () => {
     const policy = makePolicy();
     const result = canAgentSpendWithPolicy(
       policy,
-      { amount: "100000", token: "USDC", recipient: RECIPIENT_A, chain: "mainnet" },
+      {
+        amount: "100000",
+        token: "USDC",
+        recipient: RECIPIENT_A,
+        chain: "mainnet",
+      },
       "0",
     );
     expect(result.allowed).toBe(false);
@@ -297,7 +358,12 @@ describe("canAgentSpendWithPolicy", () => {
     // Already spent $4.80 — trying to spend $0.30 more would exceed $5.00 limit
     const result = canAgentSpendWithPolicy(
       policy,
-      { amount: "300000", token: "USDC", recipient: RECIPIENT_A, chain: "base-sepolia" },
+      {
+        amount: "300000",
+        token: "USDC",
+        recipient: RECIPIENT_A,
+        chain: "base-sepolia",
+      },
       "4800000",
     );
     expect(result.allowed).toBe(false);
@@ -310,7 +376,12 @@ describe("canAgentSpendWithPolicy", () => {
     // Already spent $4.50, spending $0.50 hits the $5 limit exactly
     const result = canAgentSpendWithPolicy(
       policy,
-      { amount: "500000", token: "USDC", recipient: RECIPIENT_A, chain: "base-sepolia" },
+      {
+        amount: "500000",
+        token: "USDC",
+        recipient: RECIPIENT_A,
+        chain: "base-sepolia",
+      },
       "4500000",
     );
     expect(result.allowed).toBe(true);
@@ -320,7 +391,12 @@ describe("canAgentSpendWithPolicy", () => {
     const policy = makePolicy();
     const result = canAgentSpendWithPolicy(
       policy,
-      { amount: "500001", token: "USDC", recipient: RECIPIENT_A, chain: "base-sepolia" },
+      {
+        amount: "500001",
+        token: "USDC",
+        recipient: RECIPIENT_A,
+        chain: "base-sepolia",
+      },
       "4500000",
     );
     expect(result.allowed).toBe(false);
@@ -331,7 +407,12 @@ describe("canAgentSpendWithPolicy", () => {
     policy.metadata.expiresAt = new Date(Date.now() - 1000).toISOString(); // 1s ago
     const result = canAgentSpendWithPolicy(
       policy,
-      { amount: "100000", token: "USDC", recipient: RECIPIENT_A, chain: "base-sepolia" },
+      {
+        amount: "100000",
+        token: "USDC",
+        recipient: RECIPIENT_A,
+        chain: "base-sepolia",
+      },
       "0",
     );
     expect(result.allowed).toBe(false);
@@ -343,7 +424,12 @@ describe("canAgentSpendWithPolicy", () => {
     policy.metadata.expiresAt = new Date(Date.now() + 86400_000).toISOString(); // +1 day
     const result = canAgentSpendWithPolicy(
       policy,
-      { amount: "100000", token: "USDC", recipient: RECIPIENT_A, chain: "base-sepolia" },
+      {
+        amount: "100000",
+        token: "USDC",
+        recipient: RECIPIENT_A,
+        chain: "base-sepolia",
+      },
       "0",
     );
     expect(result.allowed).toBe(true);
@@ -353,12 +439,22 @@ describe("canAgentSpendWithPolicy", () => {
     const policy = makePolicy({ allowedTokens: ["USDC", "USDT"] });
     const usdc = canAgentSpendWithPolicy(
       policy,
-      { amount: "100000", token: "USDC", recipient: RECIPIENT_A, chain: "base-sepolia" },
+      {
+        amount: "100000",
+        token: "USDC",
+        recipient: RECIPIENT_A,
+        chain: "base-sepolia",
+      },
       "0",
     );
     const usdt = canAgentSpendWithPolicy(
       policy,
-      { amount: "100000", token: "USDT", recipient: RECIPIENT_A, chain: "base-sepolia" },
+      {
+        amount: "100000",
+        token: "USDT",
+        recipient: RECIPIENT_A,
+        chain: "base-sepolia",
+      },
       "0",
     );
     expect(usdc.allowed).toBe(true);
@@ -369,12 +465,22 @@ describe("canAgentSpendWithPolicy", () => {
     const policy = makePolicy({ allowedChains: ["base-sepolia", "base"] });
     const r1 = canAgentSpendWithPolicy(
       policy,
-      { amount: "100000", token: "USDC", recipient: RECIPIENT_A, chain: "base-sepolia" },
+      {
+        amount: "100000",
+        token: "USDC",
+        recipient: RECIPIENT_A,
+        chain: "base-sepolia",
+      },
       "0",
     );
     const r2 = canAgentSpendWithPolicy(
       policy,
-      { amount: "100000", token: "USDC", recipient: RECIPIENT_A, chain: "base" },
+      {
+        amount: "100000",
+        token: "USDC",
+        recipient: RECIPIENT_A,
+        chain: "base",
+      },
       "0",
     );
     expect(r1.allowed).toBe(true);
@@ -385,7 +491,12 @@ describe("canAgentSpendWithPolicy", () => {
     const policy = makePolicy();
     const result = canAgentSpendWithPolicy(
       policy,
-      { amount: "100000", token: "USDC", recipient: RECIPIENT_A, chain: "base-sepolia" },
+      {
+        amount: "100000",
+        token: "USDC",
+        recipient: RECIPIENT_A,
+        chain: "base-sepolia",
+      },
       "0",
     );
     expect(result.policy).toStrictEqual(policy);
@@ -395,7 +506,12 @@ describe("canAgentSpendWithPolicy", () => {
     const policy = makePolicy();
     const result = canAgentSpendWithPolicy(
       policy,
-      { amount: "9999999", token: "USDC", recipient: RECIPIENT_A, chain: "base-sepolia" },
+      {
+        amount: "9999999",
+        token: "USDC",
+        recipient: RECIPIENT_A,
+        chain: "base-sepolia",
+      },
       "0",
     );
     expect(result.policy).toStrictEqual(policy);
@@ -433,9 +549,9 @@ describe("spendTracker", () => {
 
   it("tracks spend independently per ENS name", async () => {
     const ENS2 = "other-agent.acme.eth";
-    await recordSpend(ENS,  TOKEN, "100000");
+    await recordSpend(ENS, TOKEN, "100000");
     await recordSpend(ENS2, TOKEN, "999000");
-    expect(await getDailySpent(ENS,  TOKEN)).toBe("100000");
+    expect(await getDailySpent(ENS, TOKEN)).toBe("100000");
     expect(await getDailySpent(ENS2, TOKEN)).toBe("999000");
   });
 
@@ -466,12 +582,12 @@ describe("spendTracker", () => {
 describe("VCRPolicy extension fields", () => {
   it("accepts optional VCR extension fields without failing validation", () => {
     const p = makePolicy();
-    p.ensName      = "researcher-001.acmecorp.eth";
+    p.ensName = "researcher-001.acmecorp.eth";
     p.walletAddress = "0xForwarder";
-    p.custodian    = "bitgo";
-    p.network      = "hteth";
-    p.policy_hash  = "0xdeadbeef";
-    p.ipfs_cid     = "bafkreiexample";
+    p.custodian = "bitgo";
+    p.network = "hteth";
+    p.policy_hash = "0xdeadbeef";
+    p.ipfs_cid = "bafkreiexample";
     expect(() => validatePolicy(p)).not.toThrow();
   });
 
