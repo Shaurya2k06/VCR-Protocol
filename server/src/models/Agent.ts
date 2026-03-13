@@ -59,7 +59,6 @@ const AgentSchema = new Schema<IAgent>(
 
 // Index for common lookups
 AgentSchema.index({ ownerAddress: 1 });
-AgentSchema.index({ ensName: 1 });
 
 export const Agent = mongoose.model<IAgent>("Agent", AgentSchema);
 
