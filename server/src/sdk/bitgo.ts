@@ -1,6 +1,7 @@
 // ─── BitGo SDK — Wallet & Policy Management ───────────────────────────────────
 import { BitGoAPI } from "@bitgo/sdk-api";
 import { Eth } from "@bitgo/sdk-coin-eth";
+import { createHmac, timingSafeEqual } from "crypto";
 import type { BitGoWalletResult, BitGoPolicy } from "./types.js";
 
 // ─── Client Factory ───────────────────────────────────────────────────────────
@@ -44,9 +45,11 @@ export async function createAgentWallet(label: string): Promise<BitGoWalletResul
   const pendingChainInitialization =
     (coinSpecific?.pendingChainInitialization as boolean) ?? false;
 
+  const walletJson = result.wallet.toJSON() as unknown as Record<string, unknown>;
+
   return {
     walletId,
-    receiveAddress: result.wallet.receiveAddress?.address ?? "",
+    receiveAddress: (walletJson.receiveAddress as any)?.address ?? "",
     userKeyEncrypted: result.userKeychain?.encryptedPrv ?? "",
     pendingChainInitialization,
   };
@@ -198,9 +201,14 @@ export function verifyWebhookSignature(
   signature: string,
   secret: string
 ): boolean {
-  const crypto = await import("crypto");
-  const hmac = crypto.createHmac("sha256", secret);
+  const hmac = createHmac("sha256", secret);
   hmac.update(payload);
   const expected = hmac.digest("hex");
-  return expected === signature;
+  // Constant-time comparison to prevent timing attacks
+  if (expected.length !== signature.length) return false;
+  try {
+    return timingSafeEqual(Buffer.from(expected, "hex"), Buffer.from(signature, "hex"));
+  } catch {
+    return false;
+  }
 }

@@ -54,20 +54,41 @@ export async function recordSpend(
   token: string,
   amount: string
 ): Promise<IDailySpend> {
-  const current = await getDailySpent(ensName, token);
-  const newAmount = (BigInt(current) + BigInt(amount)).toString();
+  const filter = {
+    ensName: ensName.toLowerCase(),
+    token: token.toUpperCase(),
+    date: todayUTC(),
+  };
 
-  const doc = await DailySpend.findOneAndUpdate(
-    {
-      ensName: ensName.toLowerCase(),
-      token: token.toUpperCase(),
-      date: todayUTC(),
-    },
-    { $set: { amountSpent: newAmount } },
-    { upsert: true, new: true }
-  );
+  // Retry loop for atomic compare-and-swap (handles concurrent writes)
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const existing = await DailySpend.findOne(filter);
+    const currentAmount = existing?.amountSpent ?? "0";
+    const newAmount = (BigInt(currentAmount) + BigInt(amount)).toString();
 
-  return doc!;
+    if (!existing) {
+      // Insert new record — may fail with duplicate key if concurrent insert
+      try {
+        const doc = await DailySpend.create({ ...filter, amountSpent: newAmount });
+        return doc;
+      } catch (err: unknown) {
+        if ((err as any).code === 11000) continue; // duplicate key — retry
+        throw err;
+      }
+    } else {
+      // Atomic update with version check
+      const result = await DailySpend.findOneAndUpdate(
+        { ...filter, amountSpent: currentAmount },
+        { $set: { amountSpent: newAmount } },
+        { new: true }
+      );
+      if (result) return result;
+      // CAS failed — another writer changed it, retry
+      continue;
+    }
+  }
+
+  throw new Error("recordSpend: failed after 5 retries (concurrent write contention)");
 }
 
 /**

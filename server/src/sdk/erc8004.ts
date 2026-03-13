@@ -94,25 +94,20 @@ export async function waitForAgentRegistration(txHash: string): Promise<Registra
 
   const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash as `0x${string}` });
 
-  // Parse the AgentRegistered event log
+  // Parse the AgentRegistered event from logs
+  // Event: AgentRegistered(uint256 indexed agentId, address indexed owner, string agentURI)
+  // topics[0] = event signature hash, topics[1] = agentId, topics[2] = owner
   for (const log of receipt.logs) {
-    try {
-      const decoded = publicClient.decodeEventLog
-        ? // try to decode if possible
-          log
-        : log;
-
-      // The first indexed topic is agentId
-      if (log.topics.length >= 2) {
-        const agentId = parseInt(log.topics[1] ?? "0x0", 16);
-        return {
-          txHash,
-          agentId,
-          agentUri: "",
-        };
-      }
-    } catch {
-      // Not a matching log, continue
+    if (
+      log.address.toLowerCase() === ERC8004_ADDRESSES.identityRegistry.sepolia.toLowerCase() &&
+      log.topics.length >= 2
+    ) {
+      const agentId = Number(BigInt(log.topics[1]!));
+      return {
+        txHash,
+        agentId,
+        agentUri: "",
+      };
     }
   }
 

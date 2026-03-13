@@ -1,6 +1,6 @@
 // ─── Demo Routes — x402 Paywall & End-to-End Simulation ──────────────────────
 import { Router } from "express";
-import { vcrPaymentMiddleware, X402_HEADERS, canAgentSpend } from "../sdk/index.js";
+import { vcrPaymentMiddleware, X402_HEADERS, X402_FACILITATOR, canAgentSpend } from "../sdk/index.js";
 import { getDailySpent, recordSpend } from "../models/DailySpend.js";
 import type { SpendRequest } from "../sdk/index.js";
 
@@ -152,11 +152,13 @@ router.post("/simulate", async (req, res) => {
  * Alias — get daily spend for a demo agent.
  */
 router.get("/daily/:ensName/:token", async (req, res) => {
-  const { ensName, token } = req.params;
-  const spent = await getDailySpent(ensName, token);
-  return res.json({ ensName, token, dailySpent: spent });
+  try {
+    const { ensName, token } = req.params;
+    const spent = await getDailySpent(ensName, token);
+    return res.json({ ensName, token, dailySpent: spent });
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message });
+  }
 });
-
-const X402_FACILITATOR = "https://x402.org/facilitator";
 
 export default router;

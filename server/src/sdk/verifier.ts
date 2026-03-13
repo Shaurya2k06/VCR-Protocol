@@ -144,6 +144,13 @@ export function canAgentSpendWithPolicy(
   const maxTx = BigInt(policy.constraints.maxTransaction.amount);
   const reqAmount = BigInt(req.amount);
 
+  // Policy expiry check
+  if (policy.metadata.expiresAt) {
+    if (new Date() > new Date(policy.metadata.expiresAt)) {
+      return { allowed: false, reason: "Policy has expired", policy };
+    }
+  }
+
   if (reqAmount > maxTx) {
     return { allowed: false, reason: `Exceeds max transaction`, policy };
   }

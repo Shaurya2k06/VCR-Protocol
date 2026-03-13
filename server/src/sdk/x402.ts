@@ -40,7 +40,7 @@ export interface VCRPaymentOptions {
  */
 export function vcrPaymentMiddleware(options: VCRPaymentOptions) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    const paymentSig = req.headers[X402_HEADERS.PAYMENT_SIGNATURE.toLowerCase()];
+    const paymentSig = req.headers["payment-signature"] as string | undefined;
 
     if (!paymentSig) {
       // Return 402 with payment requirements

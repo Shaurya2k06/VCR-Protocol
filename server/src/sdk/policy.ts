@@ -24,8 +24,11 @@ export function validatePolicy(policy: VCRPolicy): void {
   }
   if (c.timeRestrictions) {
     const [start, end] = c.timeRestrictions.allowedHours;
-    if (start < 0 || start > 23 || end < 0 || end > 23) {
-      throw new Error("allowedHours must be in range [0, 23]");
+    if (start < 0 || start > 23) {
+      throw new Error("allowedHours start must be in range [0, 23]");
+    }
+    if (end < 1 || end > 24) {
+      throw new Error("allowedHours end must be in range [1, 24]");
     }
     if (start >= end) throw new Error("allowedHours start must be before end");
   }
