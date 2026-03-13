@@ -1,6 +1,7 @@
 // ─── VCR Policy — Creation & IPFS Management ─────────────────────────────────
 import { PinataSDK } from "pinata";
 import stringify from "json-stringify-deterministic";
+import { keccak256, toHex } from "viem";
 import type { VCRPolicy, PolicyConstraints, PolicyMetadata, PinResult } from "./types.js";
 
 // ─── Validation ───────────────────────────────────────────────────────────────
@@ -112,4 +113,13 @@ export async function fetchPolicy(cidOrUri: string): Promise<VCRPolicy> {
  */
 export function serializePolicy(policy: VCRPolicy): string {
   return stringify(policy);
+}
+
+/**
+ * Compute a keccak256 hash of the deterministically-serialized policy.
+ * Useful for integrity verification and the policy_hash metadata field.
+ */
+export function computePolicyHash(policy: VCRPolicy): string {
+  const serialized = stringify(policy);
+  return keccak256(toHex(serialized));
 }

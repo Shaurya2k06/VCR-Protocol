@@ -8,6 +8,7 @@ import policyRouter from "./routes/policy.js";
 import verifyRouter from "./routes/verify.js";
 import registerRouter from "./routes/register.js";
 import demoRouter from "./routes/demo.js";
+import walletRouter from "./routes/wallet.js";
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? "3001");
@@ -43,6 +44,7 @@ app.use("/api/policy", policyRouter);
 app.use("/api/verify", verifyRouter);
 app.use("/api/register", registerRouter);
 app.use("/api/demo", demoRouter);
+app.use("/api/wallet", walletRouter);
 
 // ─── Global Error Handler ─────────────────────────────────────────────────────
 
@@ -69,7 +71,8 @@ async function start() {
     console.log(`   Policy: http://localhost:${PORT}/api/policy`);
     console.log(`   Verify: http://localhost:${PORT}/api/verify`);
     console.log(`   Register: http://localhost:${PORT}/api/register`);
-    console.log(`   Demo: http://localhost:${PORT}/api/demo\n`);
+    console.log(`   Demo: http://localhost:${PORT}/api/demo`);
+    console.log(`   Wallet: http://localhost:${PORT}/api/wallet\n`);
   });
 }
 

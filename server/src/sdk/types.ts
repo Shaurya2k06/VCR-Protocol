@@ -72,26 +72,24 @@ export interface SpendResult {
 // ─── ERC-8004 Agent ───────────────────────────────────────────────────────────
 
 export interface AgentService {
-  type: string;
+  name: string;
   endpoint: string;
+  version?: string;
 }
 
 export interface AgentMetadata {
-  type: "autonomous-agent";
+  /** Must be the official ERC-8004 registration type URI */
+  type: "https://eips.ethereum.org/EIPS/eip-8004#registration-v1";
   name: string;
   description?: string;
   image?: string;
+  /** Each entry links back to on-chain identity via agentRegistry = "{namespace}:{chainId}:{registryAddress}" */
   registrations?: Array<{
-    chain: string;
-    registry: string;
+    agentRegistry: string;
     agentId: number;
   }>;
   services?: AgentService[];
-  x402Support?: {
-    enabled: boolean;
-    supportedTokens: string[];
-    supportedChains: string[];
-  };
+  x402Support?: boolean;
   active: boolean;
   supportedTrust?: string[];
 }

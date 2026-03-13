@@ -26,6 +26,7 @@ export {
   pinPolicy,
   fetchPolicy,
   serializePolicy,
+  computePolicyHash,
 } from "./policy.js";
 
 // ENS integration
@@ -84,3 +85,15 @@ export {
   buildEIP3009TypedData,
 } from "./x402.js";
 export type { VCRPaymentOptions, VCRClientOptions } from "./x402.js";
+
+// VCRPolicyRegistry (on-chain)
+export {
+  setPolicyOnChain,
+  revokePolicyOnChain,
+  getPolicyOnChain,
+  verifyPolicyOnChain,
+  getTotalPoliciesOnChain,
+  getPolicyHistoryCount,
+} from "./contract.js";
+export type { SetPolicyOnChainResult, OnChainPolicyRecord } from "./contract.js";
+

@@ -35,7 +35,7 @@ export default function Navbar() {
         </div>
 
         <a
-          href="https://github.com"
+          href="https://github.com/Shaurya2k06/VCR-Protocol"
           className="btn btn-outline btn-sm"
           target="_blank"
           rel="noreferrer"

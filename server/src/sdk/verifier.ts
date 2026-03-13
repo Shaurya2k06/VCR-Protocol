@@ -1,8 +1,5 @@
 import { fetchPolicy } from "./policy.js";
 import { getVCRPolicyUri } from "./ens.js";
-import { keccak256, toHex } from "viem";
-import stringify from "json-stringify-deterministic";
-import { getVCRPolicyUri } from "./ens.js";
 import type { SpendRequest, SpendResult, VCRPolicy } from "./types.js";
 
 export type DailySpentGetter = (ensName: string, token: string) => Promise<string>;

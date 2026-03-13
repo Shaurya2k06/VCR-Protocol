@@ -244,6 +244,8 @@ export async function getAgentReputation(
 
 /**
  * Build the ERC-8004 Agent URI JSON for IPFS upload.
+ * Conforms to the official ERC-8004 registration file format:
+ * https://eips.ethereum.org/EIPS/eip-8004#agent-uri-and-agent-registration-file
  */
 export function buildAgentMetadataJson(
   meta: Omit<AgentMetadata, "type">,
@@ -252,15 +254,14 @@ export function buildAgentMetadataJson(
   chainId = 11155111,
 ): AgentMetadata {
   return {
-    type: "autonomous-agent",
+    type: "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
     ...meta,
     registrations: [
       {
-        chain: `eip155:${chainId}`,
-        registry: registryAddress,
+        agentRegistry: `eip155:${chainId}:${registryAddress}`,
         agentId,
       },
     ],
-    supportedTrust: ["erc8004-reputation", "vcr-policy"],
+    supportedTrust: ["reputation", "vcr-policy"],
   };
 }

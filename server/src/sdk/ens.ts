@@ -23,43 +23,51 @@ export const ENS_ADDRESSES = {
 // ERC-8004 IdentityRegistry — Sepolia testnet
 export const ERC8004_REGISTRY_SEPOLIA = "0x8004A818BFB912233c491871b3d84c89A494BD9e" as const;
 
-// ─── ERC-7930 Encoding ────────────────────────────────────────────────────────
-
 /**
  * Encode an EVM address + chainId into ERC-7930 binary format.
  * Used to build the ENSIP-25 agent-registration text record key.
  *
- * Format:
- *   0x00          (ERC-7930 prefix)
- *   0x01          (chain type = EVM)
- *   <chainId>     (compact varint, little-endian)
- *   0x14          (address length = 20 bytes)
- *   <address>     (20 bytes, no 0x prefix)
+ * Official binary format (from ERC-7930 spec):
+ *   Version          (2 bytes, big-endian) = 0x0001
+ *   ChainType        (2 bytes, big-endian) = 0x0000 for EVM
+ *   ChainRefLength   (1 byte)              = minimal bytes for chainId
+ *   ChainReference   (variable)            = chainId as big-endian bytes
+ *   AddressLength    (1 byte)              = 0x14 (20 bytes)
+ *   Address          (20 bytes)
+ *
+ * Validated against ENSIP-25 official example:
+ *   encodeERC7930(1, "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432")
+ *   → "0x000100000101148004a169fb4a3325136eb29fa0ceb6d2e539a432"
  */
 export function encodeERC7930(chainId: number, address: string): string {
-  const addrBytes = address.replace(/^0x/i, "").toLowerCase().padStart(40, "0");
+  const addrHex = address.replace(/^0x/i, "").toLowerCase().padStart(40, "0");
 
-  // Compact varint encoding for chainId
-  const encodedChainId = encodeVarint(chainId);
+  // Encode chainId as big-endian minimal bytes
+  const chainRefBytes = chainIdToMinimalBytes(chainId);
+  const chainRefLen = chainRefBytes.length;
+  const chainRefHex = chainRefBytes.map((b) => b.toString(16).padStart(2, "0")).join("");
 
-  const prefix = "00";      // ERC-7930 prefix
-  const chainType = "01";   // EVM
-  const addrLen = "14";     // 20 bytes
+  const version = "0001";          // Version 1 (2 bytes)
+  const chainType = "0000";        // EVM chain type (2 bytes)
+  const chainRefLenHex = chainRefLen.toString(16).padStart(2, "0");
+  const addrLen = "14";            // 20 bytes
 
-  return `0x${prefix}${chainType}${encodedChainId}${addrLen}${addrBytes}`;
+  return `0x${version}${chainType}${chainRefLenHex}${chainRefHex}${addrLen}${addrHex}`;
 }
 
-function encodeVarint(value: number): string {
+/**
+ * Convert a chain ID to its minimal big-endian byte representation.
+ * e.g. chainId=1 → [0x01], chainId=11155111 → [0xaa, 0x36, 0xa7]
+ */
+function chainIdToMinimalBytes(chainId: number): number[] {
+  if (chainId === 0) return [0x00];
   const bytes: number[] = [];
-  let n = value;
-  while (n > 0x7f) {
-    bytes.push((n & 0x7f) | 0x80);
-    n = n >>> 7;
+  let n = chainId;
+  while (n > 0) {
+    bytes.unshift(n & 0xff);
+    n = n >>> 8;
   }
-  bytes.push(n & 0x7f);
-  // Pad to 4 bytes for chain ID representation
-  while (bytes.length < 4) bytes.push(0x00);
-  return bytes.map((b) => b.toString(16).padStart(2, "0")).join("");
+  return bytes;
 }
 
 /**

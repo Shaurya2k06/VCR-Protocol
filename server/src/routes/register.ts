@@ -12,6 +12,8 @@ import {
 } from "../sdk/index.js";
 import type { AgentMetadata, VCRPolicy } from "../sdk/index.js";
 import { PinataSDK } from "pinata";
+import { saveAgent, getAgentByChainId, getAgentsByOwner } from "../models/Agent.js";
+import { privateKeyToAccount } from "viem/accounts";
 
 const router = Router();
 
@@ -52,17 +54,13 @@ router.post("/", async (req, res) => {
 
     // Temporary metadata without agentId (we don't know it yet pre-registration)
     const tempMeta: AgentMetadata = {
-      type: "autonomous-agent",
+      type: "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
       name,
       description,
       services,
       active: true,
-      supportedTrust: ["erc8004-reputation", "vcr-policy"],
-      x402Support: {
-        enabled: true,
-        supportedTokens: ["USDC"],
-        supportedChains: ["base-sepolia"],
-      },
+      supportedTrust: ["reputation", "vcr-policy"],
+      x402Support: true,
     };
 
     const metaResult = await pinata.upload.public.json(tempMeta);
@@ -107,6 +105,23 @@ router.post("/", async (req, res) => {
       }
     }
 
+    // ── Step 6: Persist agent to MongoDB ──────────────────────────────────────
+    const ownerAccount = privateKeyToAccount(process.env.PRIVATE_KEY as `0x${string}`);
+    await saveAgent({
+      agentId: regResult.agentId,
+      name,
+      description,
+      ownerAddress: ownerAccount.address,
+      ensName: ensName,
+      agentUri,
+      policyUri: response.policyUri as string | undefined,
+      policyCid: response.policyCid as string | undefined,
+      registrationTxHash: txHash,
+      active: true,
+      supportedChains: ["base-sepolia"],
+      supportedTokens: ["USDC"],
+    } as any);
+
     return res.status(201).json(response);
   } catch (err) {
     return res.status(500).json({ error: (err as Error).message });
@@ -122,6 +137,9 @@ router.get("/:agentId", async (req, res) => {
     const agentId = parseInt(req.params.agentId);
     if (isNaN(agentId)) return res.status(400).json({ error: "Invalid agentId" });
 
+    // Check local DB first
+    const localAgent = await getAgentByChainId(agentId);
+
     const [owner, reputation] = await Promise.all([
       getAgentOwner(agentId),
       getAgentReputation(agentId),
@@ -135,7 +153,21 @@ router.get("/:agentId", async (req, res) => {
         count: reputation.count.toString(),
         averageScore: reputation.averageScore,
       },
+      localRecord: localAgent ?? undefined,
     });
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+/**
+ * GET /api/register/owner/:address
+ * Get all agents registered by an owner address.
+ */
+router.get("/owner/:address", async (req, res) => {
+  try {
+    const agents = await getAgentsByOwner(req.params.address);
+    return res.json({ owner: req.params.address, agents });
   } catch (err) {
     return res.status(500).json({ error: (err as Error).message });
   }
