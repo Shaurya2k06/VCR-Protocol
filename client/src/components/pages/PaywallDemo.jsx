@@ -1,211 +1,711 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { vcr } from "../../lib/api";
 
-const STEP_ICONS = ["👤", "🚧", "📜", "🌐", "✉️", "🔍", "✅", "💰", "🎉"];
-const STEP_LABELS = [
-  "Agent → Paywall",
-  "Server → 402",
-  "Parse PAYMENT-REQUIRED",
-  "canAgentSpend() check",
-  "Sign EIP-3009",
-  "Facilitator /verify",
-  "Facilitator /settle",
-  "Record spend",
-  "200 + Content",
-];
+function parseJsonHeader(value) {
+  if (!value) return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
 
-function FlowNode({ label, icon, status, detail }) {
-  const cls = `flow-node${status === "active" ? " active" : ""}${status === "success" ? " success" : ""}${status === "blocked" ? " blocked" : ""}`;
+function DetailRow({ label, value, mono = false }) {
   return (
-    <div className={cls} style={{ minWidth: 130 }}>
-      <div style={{ fontSize: "1.4rem" }}>{icon}</div>
-      <div style={{ marginTop: 6, fontSize: "0.72rem", lineHeight: 1.4 }}>{label}</div>
-      {detail && <div style={{ fontSize: "0.65rem", marginTop: 4, opacity: 0.7 }}>{detail}</div>}
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        gap: 16,
+        padding: "10px 0",
+        borderBottom: "1px solid var(--border)",
+      }}
+    >
+      <div style={{ color: "var(--text-muted)", fontSize: "0.82rem" }}>
+        {label}
+      </div>
+      <div
+        style={{
+          fontSize: "0.84rem",
+          textAlign: "right",
+          fontFamily: mono ? "var(--font-mono)" : "inherit",
+          wordBreak: "break-all",
+        }}
+      >
+        {value ?? "—"}
+      </div>
+    </div>
+  );
+}
+
+function StepRow({ index, label, state, detail }) {
+  const color =
+    state === "success"
+      ? "var(--neon-green)"
+      : state === "error"
+        ? "var(--neon-red)"
+        : state === "active"
+          ? "var(--neon-blue)"
+          : "var(--text-muted)";
+
+  const bg =
+    state === "success"
+      ? "rgba(74,222,128,0.12)"
+      : state === "error"
+        ? "rgba(248,113,113,0.12)"
+        : state === "active"
+          ? "rgba(99,210,255,0.12)"
+          : "transparent";
+
+  const border =
+    state === "success"
+      ? "rgba(74,222,128,0.25)"
+      : state === "error"
+        ? "rgba(248,113,113,0.25)"
+        : state === "active"
+          ? "rgba(99,210,255,0.25)"
+          : "var(--border)";
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "flex-start",
+        gap: 12,
+        padding: "12px 14px",
+        borderRadius: "var(--radius-md)",
+        border: `1px solid ${border}`,
+        background: bg,
+      }}
+    >
+      <div
+        style={{
+          width: 28,
+          height: 28,
+          borderRadius: "50%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          flexShrink: 0,
+          fontSize: "0.8rem",
+          fontWeight: 700,
+          color,
+          border: `1px solid ${border}`,
+        }}
+      >
+        {state === "success" ? "✓" : state === "error" ? "✗" : index + 1}
+      </div>
+      <div style={{ flex: 1 }}>
+        <div
+          style={{
+            fontSize: "0.86rem",
+            fontWeight: 600,
+            fontFamily: "var(--font-display)",
+            color,
+          }}
+        >
+          {label}
+        </div>
+        {detail ? (
+          <div
+            style={{
+              marginTop: 4,
+              fontSize: "0.76rem",
+              color: "var(--text-muted)",
+              lineHeight: 1.5,
+              wordBreak: "break-word",
+            }}
+          >
+            {detail}
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }
 
 export default function PaywallDemo() {
   const [ensName, setEnsName] = useState("");
-  const [amount, setAmount] = useState("100000");
-  const [token, setToken] = useState("USDC");
-  const [chain, setChain] = useState("base-sepolia");
-  const [recipient, setRecipient] = useState("0x0000000000000000000000000000000000000001");
+  const [amount, setAmount] = useState("");
+  const [token, setToken] = useState("");
+  const [chain, setChain] = useState("");
+  const [recipient, setRecipient] = useState("");
 
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState(null);
+  const [configLoading, setConfigLoading] = useState(true);
+  const [checking, setChecking] = useState(false);
+  const [paywallLoading, setPaywallLoading] = useState(false);
+  const [settling, setSettling] = useState(false);
+
   const [error, setError] = useState("");
-  const [activeStep, setActiveStep] = useState(-1);
+  const [paywallStatus, setPaywallStatus] = useState(null);
+  const [requirement, setRequirement] = useState(null);
+  const [checkResult, setCheckResult] = useState(null);
+  const [contentResult, setContentResult] = useState(null);
+  const [settleResult, setSettleResult] = useState(null);
+  const [logs, setLogs] = useState([]);
 
-  const simulate = async () => {
-    setLoading(true);
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadConfig() {
+      setConfigLoading(true);
+      try {
+        const res = await fetch(
+          `${import.meta.env.VITE_API_URL || "http://localhost:3001"}/api/demo/config`,
+        );
+        const data = await res.json();
+
+        if (!mounted) return;
+
+        setAmount(data.amount || "100000");
+        setToken(data.token || "USDC");
+        setChain(data.network || "base-sepolia");
+        setRecipient(data.recipient || "");
+      } catch {
+        if (!mounted) return;
+        setAmount("100000");
+        setToken("USDC");
+        setChain("base-sepolia");
+        setRecipient("");
+      } finally {
+        if (mounted) setConfigLoading(false);
+      }
+    }
+
+    loadConfig();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const steps = useMemo(() => {
+    const has402 = paywallStatus?.status === 402;
+    const checkAllowed = checkResult?.result?.allowed === true;
+    const checkRejected = checkResult?.result?.allowed === false;
+    const gotContent = !!contentResult?.success;
+    const settled = !!settleResult?.success;
+
+    return [
+      {
+        label: "Request paywall endpoint",
+        state: paywallLoading
+          ? "active"
+          : has402 || gotContent
+            ? "success"
+            : "idle",
+        detail: has402
+          ? "Backend returned a live PAYMENT-REQUIRED response."
+          : gotContent
+            ? "Backend returned protected content."
+            : "Call the real backend paywall endpoint.",
+      },
+      {
+        label: "Read PAYMENT-REQUIRED header",
+        state: requirement ? "success" : has402 ? "active" : "idle",
+        detail: requirement
+          ? `${requirement.price} ${requirement.token} on ${requirement.network}`
+          : "Extract live payment requirements from the backend response.",
+      },
+      {
+        label: "Run live VCR verification",
+        state: checking
+          ? "active"
+          : checkAllowed
+            ? "success"
+            : checkRejected
+              ? "error"
+              : "idle",
+        detail:
+          checkResult?.result?.reason ||
+          "Backend checks ENS → IPFS policy → daily spend.",
+      },
+      {
+        label: "Attempt protected content access",
+        state: gotContent
+          ? "success"
+          : paywallStatus?.status && paywallStatus.status !== 402
+            ? "active"
+            : "idle",
+        detail: gotContent
+          ? "Protected content returned from backend."
+          : "Retry paywall route once payment flow is available.",
+      },
+      {
+        label: "Persist settlement / spend",
+        state: settling ? "active" : settled ? "success" : "idle",
+        detail: settled
+          ? `Daily spent is now ${settleResult.dailySpent}`
+          : "Record successful spend against backend state.",
+      },
+    ];
+  }, [
+    paywallLoading,
+    paywallStatus,
+    requirement,
+    checking,
+    checkResult,
+    contentResult,
+    settling,
+    settleResult,
+  ]);
+
+  const loadLogs = async (currentEnsName) => {
+    if (!currentEnsName) return;
+    try {
+      const res = await fetch(
+        `${import.meta.env.VITE_API_URL || "http://localhost:3001"}/api/demo/logs/${encodeURIComponent(currentEnsName)}`,
+      );
+      const data = await res.json();
+      setLogs(Array.isArray(data.logs) ? data.logs : []);
+    } catch {
+      setLogs([]);
+    }
+  };
+
+  const requestPaywall = async () => {
     setError("");
-    setResult(null);
-    setActiveStep(-1);
+    setPaywallLoading(true);
+    setContentResult(null);
 
     try {
-      // Animate steps before API call
-      for (let i = 0; i < STEP_LABELS.length; i++) {
-        setActiveStep(i);
-        await new Promise(r => setTimeout(r, 300));
-      }
+      const res = await vcr.getPaymentRequired(
+        ensName
+          ? {
+              "x-agent-ens": ensName,
+            }
+          : {},
+      );
 
-      const res = await vcr.simulate({ ensName, amount, token, chain, recipient });
-      setResult(res);
+      setPaywallStatus(res);
+      const parsedRequirement = parseJsonHeader(res.paymentRequired);
+      setRequirement(parsedRequirement);
+
+      if (res.ok && res.body?.success) {
+        setContentResult(res.body);
+      }
     } catch (e) {
       setError(e.message);
     } finally {
-      setLoading(false);
-      setActiveStep(-1);
+      setPaywallLoading(false);
     }
   };
 
-  const getNodeStatus = (index) => {
-    if (!result) {
-      if (loading && index === activeStep) return "active";
-      return "idle";
+  const runCheck = async () => {
+    setError("");
+    setChecking(true);
+    setCheckResult(null);
+
+    try {
+      const res = await fetch(
+        `${import.meta.env.VITE_API_URL || "http://localhost:3001"}/api/demo/check`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            ensName,
+            amount,
+            token,
+            recipient,
+            chain,
+          }),
+        },
+      );
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Verification failed");
+      }
+
+      setCheckResult(data);
+      await loadLogs(ensName);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setChecking(false);
     }
-    const steps = result.steps ?? [];
-    const step = steps[index];
-    if (!step) return "idle";
-    if (step.status === "ok") return "success";
-    if (step.status === "fail") return "blocked";
-    return "idle";
   };
+
+  const recordSettlement = async () => {
+    setError("");
+    setSettling(true);
+    setSettleResult(null);
+
+    try {
+      const res = await fetch(
+        `${import.meta.env.VITE_API_URL || "http://localhost:3001"}/api/demo/settle`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            ensName,
+            amount,
+            token,
+            recipient,
+            chain,
+          }),
+        },
+      );
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Settlement recording failed");
+      }
+
+      setSettleResult(data);
+      await loadLogs(ensName);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSettling(false);
+    }
+  };
+
+  const canRunActions =
+    ensName.trim() &&
+    amount.trim() &&
+    token.trim() &&
+    chain.trim() &&
+    recipient.trim();
 
   return (
     <div className="page">
       <div className="container">
         <div className="page-header">
           <div className="badge badge-red" style={{ marginBottom: 12, gap: 6 }}>
-            <span className="status-dot amber" />x402 · VCR · EIP-3009
+            <span className="status-dot amber" />
+            Live Backend Workflow
           </div>
-          <h1>x402 Paywall Demo</h1>
-          <p>Simulate the full agent → VCR check → x402 payment → content delivery flow</p>
+          <h1>Paywall Verification</h1>
+          <p>
+            This page uses the real backend paywall, real VCR verification, and
+            real database-backed spend tracking. No simulated frontend flow.
+          </p>
         </div>
 
         <div className="grid-2">
-          {/* Config */}
           <div>
             <div className="card">
-              <div className="card-header"><h2>Simulation Setup</h2></div>
+              <div className="card-header">
+                <h2>Live Request Setup</h2>
+                <p>
+                  Use actual backend configuration and your registered
+                  ENS-linked agent.
+                </p>
+              </div>
 
               <div className="form-group">
                 <label className="form-label">Agent ENS Name</label>
-                <input className="form-input" value={ensName} onChange={e => setEnsName(e.target.value)} placeholder="youragent.eth" />
+                <input
+                  className="form-input"
+                  value={ensName}
+                  onChange={(e) => setEnsName(e.target.value)}
+                  placeholder="agent.yourdomain.eth"
+                />
               </div>
+
               <div className="form-row">
                 <div className="form-group">
                   <label className="form-label">Amount (base units)</label>
-                  <input className="form-input mono" value={amount} onChange={e => setAmount(e.target.value)} />
+                  <input
+                    className="form-input mono"
+                    value={amount}
+                    onChange={(e) => setAmount(e.target.value)}
+                    disabled={configLoading}
+                  />
                 </div>
                 <div className="form-group">
                   <label className="form-label">Token</label>
-                  <input className="form-input" value={token} onChange={e => setToken(e.target.value)} />
+                  <input
+                    className="form-input"
+                    value={token}
+                    onChange={(e) => setToken(e.target.value)}
+                    disabled={configLoading}
+                  />
                 </div>
               </div>
+
               <div className="form-group">
-                <label className="form-label">Paywall Recipient</label>
-                <input className="form-input mono" value={recipient} onChange={e => setRecipient(e.target.value)} />
+                <label className="form-label">Recipient</label>
+                <input
+                  className="form-input mono"
+                  value={recipient}
+                  onChange={(e) => setRecipient(e.target.value)}
+                  disabled={configLoading}
+                />
               </div>
+
               <div className="form-group">
                 <label className="form-label">Network</label>
-                <input className="form-input" value={chain} onChange={e => setChain(e.target.value)} />
+                <input
+                  className="form-input"
+                  value={chain}
+                  onChange={(e) => setChain(e.target.value)}
+                  disabled={configLoading}
+                />
               </div>
 
-              {error && <div className="alert alert-error" style={{ marginBottom: 16 }}>{error}</div>}
-
-              <button className="btn btn-primary btn-full" onClick={simulate} disabled={loading || !ensName}>
-                {loading ? <><div className="spinner" />Simulating…</> : "▶ Run x402 + VCR Simulation"}
-              </button>
-
-              {/* Protocol reference */}
-              <div className="divider" />
-              <div style={{ fontSize: "0.78rem", color: "var(--text-secondary)", lineHeight: 1.8 }}>
-                <strong style={{ color: "var(--text-primary)" }}>x402 V2 Headers:</strong>
-                <div className="code-block" style={{ marginTop: 8, padding: "10px 14px", fontSize: "0.74rem" }}>
-                  {`PAYMENT-REQUIRED   → server to client\nPAYMENT-SIGNATURE  → client to server\nPAYMENT-RESPONSE   → server to client`}
+              {error ? (
+                <div className="alert alert-error" style={{ marginBottom: 16 }}>
+                  {error}
                 </div>
+              ) : null}
+
+              <div className="flex gap-3 mt-4" style={{ flexWrap: "wrap" }}>
+                <button
+                  className="btn btn-outline"
+                  onClick={requestPaywall}
+                  disabled={!canRunActions || paywallLoading}
+                >
+                  {paywallLoading ? (
+                    <>
+                      <div className="spinner" />
+                      Requesting…
+                    </>
+                  ) : (
+                    "1. Hit Paywall"
+                  )}
+                </button>
+
+                <button
+                  className="btn btn-primary"
+                  onClick={runCheck}
+                  disabled={!canRunActions || checking}
+                >
+                  {checking ? (
+                    <>
+                      <div className="spinner" />
+                      Verifying…
+                    </>
+                  ) : (
+                    "2. Run Verification"
+                  )}
+                </button>
+
+                <button
+                  className="btn btn-ghost"
+                  onClick={recordSettlement}
+                  disabled={
+                    !canRunActions ||
+                    settling ||
+                    checkResult?.result?.allowed !== true
+                  }
+                >
+                  {settling ? (
+                    <>
+                      <div className="spinner" />
+                      Recording…
+                    </>
+                  ) : (
+                    "3. Record Settlement"
+                  )}
+                </button>
               </div>
             </div>
 
-            {/* EIP-3009 reference */}
             <div className="card" style={{ marginTop: 16 }}>
-              <div className="card-header"><h2 style={{ fontSize: "0.95rem" }}>EIP-3009 Signature Structure</h2></div>
-              <pre className="code-block" style={{ fontSize: "0.72rem", padding: "12px 14px" }}>
-{`TransferWithAuthorization {
-  from:        address
-  to:          address (paywall)
-  value:       uint256 (amount)
-  validAfter:  uint256 (0)
-  validBefore: uint256 (now + 1h)
-  nonce:       bytes32 (random)
-}
+              <div className="card-header">
+                <h2>Live Backend Results</h2>
+                <p>What your backend is actually returning right now.</p>
+              </div>
 
-Domain: USD Coin v2
-Chain: base-sepolia (84532)`}
-              </pre>
+              <DetailRow
+                label="Paywall HTTP Status"
+                value={paywallStatus?.status}
+              />
+              <DetailRow
+                label="Payment Requirement Header"
+                value={paywallStatus?.paymentRequired ? "Present" : "Missing"}
+              />
+              <DetailRow
+                label="Verification Allowed"
+                value={
+                  checkResult?.result
+                    ? checkResult.result.allowed
+                      ? "Yes"
+                      : "No"
+                    : "—"
+                }
+              />
+              <DetailRow
+                label="Settlement Recorded"
+                value={settleResult?.success ? "Yes" : "No"}
+              />
+              <DetailRow
+                label="Daily Spend Total"
+                value={
+                  settleResult?.dailySpent || contentResult?.daily?.amountSpent
+                }
+                mono
+              />
             </div>
+
+            {requirement ? (
+              <div className="card" style={{ marginTop: 16 }}>
+                <div className="card-header">
+                  <h2>PAYMENT-REQUIRED</h2>
+                  <p>Live header returned by your backend paywall route.</p>
+                </div>
+                <pre
+                  className="code-block"
+                  style={{ maxHeight: 260, overflow: "auto" }}
+                >
+                  {JSON.stringify(requirement, null, 2)}
+                </pre>
+              </div>
+            ) : null}
           </div>
 
-          {/* Flow visualization */}
           <div>
-            <div className="card" style={{ minHeight: 500 }}>
+            <div className="card" style={{ minHeight: 420 }}>
               <div className="card-header">
-                <div className="flex items-center justify-between">
-                  <h2>Protocol Flow</h2>
-                  {result && (
-                    <span className={`badge ${result.success ? "badge-green" : "badge-red"}`}>
-                      {result.success ? "✓ Paid & Delivered" : "✗ Blocked"}
-                    </span>
-                  )}
-                </div>
+                <h2>Workflow State</h2>
+                <p>Track the real backend workflow end to end.</p>
               </div>
 
-              {/* Step flow */}
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {STEP_LABELS.map((label, i) => {
-                  const step = result?.steps?.[i];
-                  const status = getNodeStatus(i);
-                  const isActive = loading && i === activeStep;
-
-                  return (
-                    <div key={label} className="flex items-center gap-3" style={{ padding: "8px 12px", borderRadius: "var(--radius-md)", background: isActive ? "rgba(99,210,255,0.06)" : "transparent", transition: "background 0.2s" }}>
-                      <div style={{ width: 28, height: 28, borderRadius: "50%", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.85rem",
-                        background: status === "success" ? "rgba(74,222,128,0.15)" : status === "blocked" ? "rgba(248,113,113,0.15)" : status === "active" ? "rgba(99,210,255,0.15)" : "var(--bg-card)",
-                        color: status === "success" ? "var(--neon-green)" : status === "blocked" ? "var(--neon-red)" : status === "active" ? "var(--neon-blue)" : "var(--text-muted)",
-                        border: `1px solid ${status === "success" ? "rgba(74,222,128,0.3)" : status === "blocked" ? "rgba(248,113,113,0.3)" : status === "active" ? "rgba(99,210,255,0.3)" : "var(--border)"}`,
-                      }}>
-                        {status === "success" ? "✓" : status === "blocked" ? "✗" : isActive ? <div className="spinner" style={{ width: 12, height: 12, borderWidth: 2 }} /> : i + 1}
-                      </div>
-
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: "0.82rem", fontWeight: 600, fontFamily: "var(--font-display)", color: status === "success" ? "var(--neon-green)" : status === "blocked" ? "var(--neon-red)" : isActive ? "var(--neon-blue)" : "var(--text-secondary)" }}>
-                          {label}
-                        </div>
-                        {step?.detail && (
-                          <div style={{ fontSize: "0.73rem", color: "var(--text-muted)", marginTop: 2 }}>{step.detail}</div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
+              <div
+                style={{ display: "flex", flexDirection: "column", gap: 12 }}
+              >
+                {steps.map((step, index) => (
+                  <StepRow
+                    key={step.label}
+                    index={index}
+                    label={step.label}
+                    state={step.state}
+                    detail={step.detail}
+                  />
+                ))}
               </div>
 
-              {/* Result summary */}
-              {result && (
+              {checkResult?.result?.reason ? (
                 <>
                   <div className="divider" />
-                  {result.success ? (
-                    <div className="alert alert-success" style={{ fontSize: "0.85rem" }}>
-                      🎉 Payment settled! Daily spend now: <strong>{result.dailySpentAfter} {token}</strong> base units
-                    </div>
-                  ) : (
-                    <div className="alert alert-error" style={{ fontSize: "0.85rem" }}>
-                      Blocked at step {result.blockedAt}: {result.reason}
-                    </div>
-                  )}
+                  <div
+                    className={`alert ${
+                      checkResult.result.allowed
+                        ? "alert-success"
+                        : "alert-error"
+                    }`}
+                  >
+                    {checkResult.result.allowed
+                      ? "Verification passed against the live backend."
+                      : checkResult.result.reason}
+                  </div>
                 </>
+              ) : null}
+            </div>
+
+            {contentResult ? (
+              <div className="card" style={{ marginTop: 16 }}>
+                <div className="card-header">
+                  <h2>Protected Content Response</h2>
+                  <p>
+                    Actual content payload returned from the backend paywall
+                    route.
+                  </p>
+                </div>
+                <pre
+                  className="code-block"
+                  style={{ maxHeight: 260, overflow: "auto" }}
+                >
+                  {JSON.stringify(contentResult, null, 2)}
+                </pre>
+              </div>
+            ) : null}
+
+            <div className="card" style={{ marginTop: 16 }}>
+              <div className="card-header">
+                <h2>Recent Transaction Logs</h2>
+                <p>Latest records stored by the backend for this ENS name.</p>
+              </div>
+
+              {!logs.length ? (
+                <div
+                  style={{
+                    color: "var(--text-muted)",
+                    fontSize: "0.84rem",
+                    padding: "12px 0",
+                  }}
+                >
+                  No logs loaded yet.
+                </div>
+              ) : (
+                <div
+                  style={{ display: "flex", flexDirection: "column", gap: 10 }}
+                >
+                  {logs.slice(0, 6).map((log) => (
+                    <div
+                      key={log._id || `${log.createdAt}-${log.amount}`}
+                      style={{
+                        border: "1px solid var(--border)",
+                        borderRadius: "var(--radius-md)",
+                        padding: "12px 14px",
+                        background: "var(--bg-card)",
+                      }}
+                    >
+                      <div
+                        className="flex items-center justify-between"
+                        style={{ gap: 12 }}
+                      >
+                        <div
+                          style={{
+                            fontSize: "0.82rem",
+                            fontWeight: 600,
+                            fontFamily: "var(--font-display)",
+                          }}
+                        >
+                          {log.type}
+                        </div>
+                        <span
+                          className={`badge ${
+                            log.status === "completed"
+                              ? "badge-green"
+                              : log.status === "rejected"
+                                ? "badge-red"
+                                : "badge-gray"
+                          }`}
+                        >
+                          {log.status}
+                        </span>
+                      </div>
+                      <div
+                        style={{
+                          marginTop: 8,
+                          fontSize: "0.76rem",
+                          color: "var(--text-muted)",
+                          lineHeight: 1.7,
+                        }}
+                      >
+                        <div>
+                          Amount: <span className="mono">{log.amount}</span>{" "}
+                          {log.token}
+                        </div>
+                        <div>
+                          Recipient:{" "}
+                          <span className="mono">{log.recipient}</span>
+                        </div>
+                        <div>
+                          Chain: <span className="mono">{log.chain}</span>
+                        </div>
+                        <div>
+                          Time:{" "}
+                          <span className="mono">
+                            {log.createdAt
+                              ? new Date(log.createdAt).toLocaleString()
+                              : "—"}
+                          </span>
+                        </div>
+                        {log.vcrReason ? (
+                          <div>Reason: {log.vcrReason}</div>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
           </div>
