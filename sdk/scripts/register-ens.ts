@@ -6,6 +6,12 @@
 // Usage:
 //   npm run register-ens
 //   npm run register-ens -- --name vcragent --sub researcher-001
+//   npm run register-ens -- --name vcragent --sub researcher-001 --owner 0xABCD...1234
+//
+//   --owner  Optional. Address that will OWN the ENS name & subdomain.
+//            Defaults to the PRIVATE_KEY wallet (signer).
+//            Useful to register names that belong to another wallet while
+//            your signer pays the gas.
 //
 // What it does:
 //   1. Find an available .eth name on Sepolia
@@ -205,8 +211,9 @@ function parseArgs(argv: string[]) {
     return i !== -1 ? args[i + 1] : undefined;
   };
   return {
-    name: get("--name"),
-    sub: get("--sub") ?? "researcher-001",
+    name:  get("--name"),
+    sub:   get("--sub") ?? "researcher-001",
+    owner: get("--owner"),
   };
 }
 
@@ -234,7 +241,7 @@ function computeSubnodeHash(
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  const { name: forcedName, sub: subdomain } = parseArgs(process.argv);
+  const { name: forcedName, sub: subdomain, owner: ownerArg } = parseArgs(process.argv);
 
   // ── Validate env ─────────────────────────────────────────────────────────
   const missingVars: string[] = [];
@@ -245,7 +252,18 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Validate --owner address if provided
+  if (ownerArg && !/^0x[0-9a-fA-F]{40}$/.test(ownerArg)) {
+    console.error(`\n❌  Invalid --owner address: ${ownerArg}`);
+    console.error("    Must be a checksummed or lowercase hex address (0x + 40 hex chars)\n");
+    process.exit(1);
+  }
+
   const account = privateKeyToAccount(process.env.PRIVATE_KEY as `0x${string}`);
+
+  // ownerAddress: who OWNS the name. Defaults to signer if --owner not given.
+  const ownerAddress = (ownerArg ?? account.address) as `0x${string}`;
+  const delegatedOwner = ownerArg !== undefined && ownerArg.toLowerCase() !== account.address.toLowerCase();
 
   const publicClient = createPublicClient({
     chain: sepolia,
@@ -261,7 +279,10 @@ async function main(): Promise<void> {
   console.log("\n╔══════════════════════════════════════════════════════╗");
   console.log("║          VCR Protocol — ENS Sepolia Setup            ║");
   console.log("╚══════════════════════════════════════════════════════╝\n");
-  console.log(`  Wallet  : ${account.address}`);
+  console.log(`  Signer  : ${account.address}  (pays gas)`);
+  if (delegatedOwner) {
+    console.log(`  Owner   : ${ownerAddress}  (--owner flag — will own the ENS name)`);
+  }
 
   const balance = await publicClient.getBalance({ address: account.address });
   console.log(`  Balance : ${formatEther(balance)} ETH (Sepolia)\n`);
@@ -321,9 +342,12 @@ async function main(): Promise<void> {
       }
     }
 
-    if (actualOwner.toLowerCase() === account.address.toLowerCase()) {
+    if (
+      actualOwner.toLowerCase() === account.address.toLowerCase() ||
+      actualOwner.toLowerCase() === ownerAddress.toLowerCase()
+    ) {
       console.log(
-        `  ✅  "${candidate}.eth" is already owned by this wallet — skipping registration`,
+        `  ✅  "${candidate}.eth" is already owned by ${actualOwner} — skipping registration`,
       );
       chosenName = candidate;
       isAlreadyOwned = true;
@@ -382,9 +406,10 @@ async function main(): Promise<void> {
       `0x${Buffer.from(secretBytes).toString("hex")}` as `0x${string}`;
 
     // Build the Registration struct
+    // owner = ownerAddress (may differ from signer when --owner is used)
     const registration = {
       label: chosenName,
-      owner: account.address,
+      owner: ownerAddress,
       duration: DURATION,
       secret,
       resolver: PUBLIC_RESOLVER,
@@ -468,38 +493,72 @@ async function main(): Promise<void> {
   const subdomainExists =
     subnodeOwnerInRegistry !== "0x0000000000000000000000000000000000000000";
 
+  // ── Detect whether the parent is wrapped in the NameWrapper ──────────────
+  // The Sepolia v3 ETHRegistrarController does NOT wrap names in the
+  // NameWrapper — it sets the ENS Registry owner directly to the user's
+  // wallet via ens.setRecord(). Calling NameWrapper.setSubnodeRecord on an
+  // unwrapped parent throws Unauthorised(bytes32,address) (0xb455aae8).
+  //
+  //   Wrapped   → ENS Registry owner of parent == NameWrapper address
+  //               → use NameWrapper.setSubnodeRecord(parentNode, string label, …)
+  //   Unwrapped → ENS Registry owner of parent == user wallet
+  //               → use ENS Registry.setSubnodeRecord(parentNode, bytes32 labelhash, …)
+  const parentRegistryOwner = (await publicClient.readContract({
+    address: ENS_REGISTRY,
+    abi: ensRegistryAbi,
+    functionName: "owner",
+    args: [parentNode],
+  })) as `0x${string}`;
+
+  const parentIsWrapped =
+    parentRegistryOwner.toLowerCase() === NAME_WRAPPER.toLowerCase();
+
+  console.log(`         Parent ENS owner : ${parentRegistryOwner}`);
+  console.log(
+    `         Parent is wrapped: ${parentIsWrapped ? "yes (NameWrapper)" : "no (direct — will use ENS Registry)"}`,
+  );
+
+  let shouldWriteSubdomain = !subdomainExists;
+  let subdomainAction = "created";
+
   if (subdomainExists) {
+    let currentOwner = subnodeOwnerInRegistry;
+
+    if (subnodeOwnerInRegistry.toLowerCase() === NAME_WRAPPER.toLowerCase()) {
+      try {
+        const [wrappedOwner] = (await publicClient.readContract({
+          address: NAME_WRAPPER,
+          abi: nameWrapperAbi,
+          functionName: "getData",
+          args: [BigInt(subnodeHex)],
+        })) as [`0x${string}`, number, bigint];
+        currentOwner = wrappedOwner;
+      } catch {
+        // keep registry owner when NameWrapper data cannot be read
+      }
+    }
+
     console.log(
-      `  ✅  Subdomain "${fullSubdomain}" already exists in registry — skipping creation\n`,
+      `  ℹ️   Subdomain "${fullSubdomain}" already exists (current owner: ${currentOwner})`,
     );
+
+    if (currentOwner.toLowerCase() === ownerAddress.toLowerCase()) {
+      console.log(
+        "  ✅  Existing subdomain already has the requested owner — no update needed\n",
+      );
+      shouldWriteSubdomain = false;
+    } else {
+      console.log(
+        `  [3/3] Updating subdomain owner to ${ownerAddress} (Tx 3)…`,
+      );
+      shouldWriteSubdomain = true;
+      subdomainAction = "updated";
+    }
   } else {
     console.log(`  [3/3] Creating subdomain "${fullSubdomain}" (Tx 3)…`);
+  }
 
-    // ── Detect whether the parent is wrapped in the NameWrapper ──────────────
-    // The Sepolia v3 ETHRegistrarController does NOT wrap names in the
-    // NameWrapper — it sets the ENS Registry owner directly to the user's
-    // wallet via ens.setRecord(). Calling NameWrapper.setSubnodeRecord on an
-    // unwrapped parent throws Unauthorised(bytes32,address) (0xb455aae8).
-    //
-    //   Wrapped   → ENS Registry owner of parent == NameWrapper address
-    //               → use NameWrapper.setSubnodeRecord(parentNode, string label, …)
-    //   Unwrapped → ENS Registry owner of parent == user wallet
-    //               → use ENS Registry.setSubnodeRecord(parentNode, bytes32 labelhash, …)
-    const parentRegistryOwner = (await publicClient.readContract({
-      address: ENS_REGISTRY,
-      abi: ensRegistryAbi,
-      functionName: "owner",
-      args: [parentNode],
-    })) as `0x${string}`;
-
-    const parentIsWrapped =
-      parentRegistryOwner.toLowerCase() === NAME_WRAPPER.toLowerCase();
-
-    console.log(`         Parent ENS owner : ${parentRegistryOwner}`);
-    console.log(
-      `         Parent is wrapped: ${parentIsWrapped ? "yes (NameWrapper)" : "no (direct — will use ENS Registry)"}`,
-    );
-
+  if (shouldWriteSubdomain) {
     let subTxHash: `0x${string}`;
 
     if (parentIsWrapped) {
@@ -516,7 +575,7 @@ async function main(): Promise<void> {
         args: [
           parentNode,
           subdomain,
-          account.address, // owner = our wallet
+          ownerAddress,    // owner — may differ from signer when --owner is set
           PUBLIC_RESOLVER, // resolver
           0n, // TTL
           0, // fuses: none burned
@@ -535,7 +594,7 @@ async function main(): Promise<void> {
         args: [
           parentNode,
           labelhash(subdomain) as `0x${string}`, // bytes32 labelhash of the subdomain label
-          account.address, // owner = our wallet
+          ownerAddress,    // owner — may differ from signer when --owner is set
           PUBLIC_RESOLVER, // resolver
           0n, // TTL
         ],
@@ -548,7 +607,7 @@ async function main(): Promise<void> {
       hash: subTxHash,
     });
     console.log(
-      `         ✅  Subdomain created! Gas used: ${subReceipt.gasUsed.toLocaleString()}\n`,
+      `         ✅  Subdomain ${subdomainAction}! Gas used: ${subReceipt.gasUsed.toLocaleString()}\n`,
     );
   }
 
@@ -562,9 +621,10 @@ async function main(): Promise<void> {
 
   console.log(`  Registry owner of "${fullSubdomain}": ${finalOwner}`);
 
-  if (finalOwner.toLowerCase() === account.address.toLowerCase()) {
+  if (finalOwner.toLowerCase() === ownerAddress.toLowerCase()) {
+    const ownerLabel = delegatedOwner ? `--owner address (${ownerAddress.slice(0, 10)}…)` : "your signer key";
     console.log(
-      "  ✅  Direct ownership confirmed — setText() will work from your key\n",
+      `  ✅  Direct ownership confirmed — setText() will work from ${ownerLabel}\n`,
     );
   } else if (finalOwner.toLowerCase() === NAME_WRAPPER.toLowerCase()) {
     // Wrapped — confirm NameWrapper ownership
@@ -576,13 +636,14 @@ async function main(): Promise<void> {
         args: [BigInt(subnodeHex)],
       })) as [`0x${string}`, number, bigint];
 
-      if (nwOwner.toLowerCase() === account.address.toLowerCase()) {
+      if (nwOwner.toLowerCase() === ownerAddress.toLowerCase()) {
+        const ownerLabel = delegatedOwner ? `--owner address (${ownerAddress.slice(0, 10)}…)` : "your signer key";
         console.log(
-          "  ✅  Wrapped ownership confirmed — setText() will work from your key\n",
+          `  ✅  Wrapped ownership confirmed — setText() will work from ${ownerLabel}\n`,
         );
       } else {
         console.warn(
-          `  ⚠️   NameWrapper owner is ${nwOwner}, expected ${account.address}`,
+          `  ⚠️   NameWrapper owner is ${nwOwner}, expected ${ownerAddress}`,
         );
         console.warn(
           "     setText() may fail — check NameWrapper approval status\n",
@@ -606,14 +667,15 @@ async function main(): Promise<void> {
   console.log("╚══════════════════════════════════════════════════════╝\n");
   console.log(`  Base domain : ${baseDomain}`);
   console.log(`  Subdomain   : ${fullSubdomain}`);
-  console.log(`  Wallet      : ${account.address}\n`);
+  console.log(`  Signer      : ${account.address}  (paid gas)`);
+  console.log(`  Owner       : ${ownerAddress}${delegatedOwner ? "  (--owner)" : "  (signer)"}\n`);
   console.log("  ─── Run the agent setup next: ────────────────────────\n");
   console.log(`  npm run setup -- \\`);
   console.log(`    --name ${subdomain} \\`);
   console.log(`    --domain ${baseDomain} \\`);
   console.log(`    --max-tx 500 \\`);
   console.log(`    --daily 5000 \\`);
-  console.log(`    --recipient ${account.address} \\`);
+  console.log(`    --recipient ${ownerAddress} \\`);
   console.log(`    --description "VCR demo agent"\n`);
   console.log(
     "  ⚠️   Add ALL recipient addresses now — BitGo policy locks after 48h.\n",
