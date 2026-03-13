@@ -1,25 +1,51 @@
 // ─── VCR Protocol SDK — Public API ────────────────────────────────────────────
-// Import this module to use the full VCR SDK.
+// Single entry point for the vcr-protocol SDK.
+// Import from here for the full public API surface.
 
-// Core types
+// ─── Core Types ───────────────────────────────────────────────────────────────
+
 export type {
+  // Policy
   VCRPolicy,
-  PolicyConstraints,
+  VCRConstraints,
+  PolicyConstraints, // alias for backward compatibility
   PolicyMetadata,
   TimeRestrictions,
   TokenAmount,
+  // Spend verification
   SpendRequest,
   SpendResult,
-  AgentMetadata,
-  AgentService,
+  SpendSummary,
+  // Agent lifecycle
+  CreateAgentConfig,
+  AgentRecord,
+  // ENSIP-25
+  ENSAgentLink,
+  LinkVerificationResult,
+  // BitGo
+  BitGoConfig,
   BitGoWalletResult,
   BitGoPolicy,
+  // Integrity
+  IntegrityResult,
+  // ERC-8004
+  AgentMetadata,
+  AgentService,
+  // x402
   X402PaymentRequirement,
+  // IPFS
   PinResult,
+  // ENS
   ENSSetResult,
 } from "./types.js";
 
-// Policy management
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+export { CONTRACTS, CHAIN_IDS } from "./constants.js";
+export type { NetworkName, ChainName } from "./constants.js";
+
+// ─── Policy Management ────────────────────────────────────────────────────────
+
 export {
   createPolicy,
   validatePolicy,
@@ -29,7 +55,40 @@ export {
   computePolicyHash,
 } from "./policy.js";
 
-// ENS integration
+// ─── Policy Resolution (ENS → IPFS, with cache) ───────────────────────────────
+
+export {
+  resolveAgentPolicy,
+  invalidatePolicyCache,
+  clearPolicyCache,
+  getPolicyCacheEntry,
+} from "./resolvePolicy.js";
+
+// ─── Spend Tracker ────────────────────────────────────────────────────────────
+
+export {
+  getDailySpent,
+  recordSpend,
+  getSpendSummary,
+  resetDailySpend,
+  clearAllSpendData,
+} from "./spendTracker.js";
+
+// ─── Core Verifier ────────────────────────────────────────────────────────────
+
+export { canAgentSpend, canAgentSpendWithPolicy } from "./verifier.js";
+export type { DailySpentGetter } from "./verifier.js";
+
+// ─── Policy Integrity ─────────────────────────────────────────────────────────
+
+export { verifyPolicyIntegrity } from "./verifyIntegrity.js";
+
+// ─── Agent Lifecycle ──────────────────────────────────────────────────────────
+
+export { createAgent } from "./createAgent.js";
+
+// ─── ENS Integration ──────────────────────────────────────────────────────────
+
 export {
   ENS_ADDRESSES,
   ERC8004_REGISTRY_SEPOLIA,
@@ -43,14 +102,8 @@ export {
   verifyAgentENSLink,
 } from "./ens.js";
 
-// Core verifier
-export {
-  canAgentSpend,
-  canAgentSpendWithPolicy,
-} from "./verifier.js";
-export type { DailySpentGetter } from "./verifier.js";
+// ─── ERC-8004 ─────────────────────────────────────────────────────────────────
 
-// ERC-8004
 export {
   ERC8004_ADDRESSES,
   registerAgent,
@@ -63,7 +116,8 @@ export {
 } from "./erc8004.js";
 export type { RegistrationResult, ReputationSummary } from "./erc8004.js";
 
-// BitGo
+// ─── BitGo ────────────────────────────────────────────────────────────────────
+
 export {
   createAgentWallet,
   getWallet,
@@ -73,10 +127,14 @@ export {
   approvePendingApproval,
   rejectPendingApproval,
   verifyWebhookSignature,
+  computeBitGoPolicyHash, // also re-exported from verifyIntegrity.ts under same name
 } from "./bitgo.js";
 export type { SendResult } from "./bitgo.js";
 
-// x402
+// ─── IPFS / Pinata ────────────────────────────────────────────────────────────
+
+// ─── x402 ─────────────────────────────────────────────────────────────────────
+
 export {
   X402_HEADERS,
   X402_FACILITATOR,
@@ -86,7 +144,8 @@ export {
 } from "./x402.js";
 export type { VCRPaymentOptions, VCRClientOptions } from "./x402.js";
 
-// VCRPolicyRegistry (on-chain)
+// ─── On-Chain VCRPolicyRegistry ───────────────────────────────────────────────
+
 export {
   setPolicyOnChain,
   revokePolicyOnChain,
@@ -95,5 +154,7 @@ export {
   getTotalPoliciesOnChain,
   getPolicyHistoryCount,
 } from "./contract.js";
-export type { SetPolicyOnChainResult, OnChainPolicyRecord } from "./contract.js";
-
+export type {
+  SetPolicyOnChainResult,
+  OnChainPolicyRecord,
+} from "./contract.js";

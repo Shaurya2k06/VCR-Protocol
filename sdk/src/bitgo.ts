@@ -1,7 +1,19 @@
 // ─── BitGo SDK — Wallet & Policy Management ───────────────────────────────────
+//
+// Key rules:
+//   • walletVersion MUST be 3  (v6 requires a BitGo support ticket)
+//   • multisigType  MUST be "onchain"  (TSS requires contacting BitGo support)
+//   • All policy amounts MUST be in WEI — NOT USD, NOT USDC base units.
+//     1 ETH = 1_000_000_000_000_000_000 wei.
+//   • BitGo OTP for test env is EXACTLY 7 zeroes: "0000000"
+//   • Policy rules lock permanently 48 hours after wallet creation.
+//   • userKeyPrv is returned ONCE — caller must persist it securely immediately.
+
 import { BitGoAPI } from "@bitgo/sdk-api";
 import { Eth } from "@bitgo/sdk-coin-eth";
-import { createHmac, timingSafeEqual } from "crypto";
+import { keccak256, toHex } from "viem";
+import stringify from "json-stringify-deterministic";
+import { timingSafeEqual } from "crypto";
 import type { BitGoWalletResult, BitGoPolicy } from "./types.js";
 
 // ─── Client Factory ───────────────────────────────────────────────────────────
@@ -12,57 +24,156 @@ function getBitGo(): BitGoAPI {
 
   const bitgo = new BitGoAPI({ env: "test" });
   bitgo.register("eth", Eth.createInstance);
-  bitgo.register("hteth", Eth.createInstance); // Hoodi testnet
+  bitgo.register("hteth", Eth.createInstance); // Hoodi testnet (chain ID 560048)
   bitgo.authenticateWithAccessToken({ accessToken });
   return bitgo;
 }
 
-// ─── Wallet Management ────────────────────────────────────────────────────────
+// ─── Wallet Creation ──────────────────────────────────────────────────────────
 
 /**
  * Create a new BitGo v3 onchain multisig wallet for an agent.
- * IMPORTANT: userKeychain.prv is returned ONLY ONCE — store it securely.
- * IMPORTANT: Fund the enterprise gas tank BEFORE calling this.
+ *
+ * Steps performed:
+ *   1. Generate wallet (v3, onchain multisig)
+ *   2. Poll until on-chain initialization is complete (up to 5 minutes)
+ *   3. Create a forwarder address — this is the address the agent actually uses
+ *   4. Fetch the live wallet policy and compute its keccak256 hash
+ *   5. Return walletId, forwarderAddress, userKeyPrv (plaintext, ONE TIME), policyHash
+ *
+ * IMPORTANT: Fund the enterprise gas tank BEFORE calling this or initialization
+ * will time out silently.
+ *
+ * IMPORTANT: The returned `userKeyPrv` is the plaintext BIP32 user key.
+ * It is ONLY available here — the BitGo API never returns it again.
+ * The caller MUST write it to secure storage before this function returns.
+ *
+ * @param label             - Human-readable wallet label
+ * @param passphrase        - Wallet encryption passphrase (stored by caller)
+ * @param allowedRecipients - All whitelisted recipient addresses. These are
+ *                            set in the BitGo policy and become immutable after
+ *                            48 hours — include every address you will ever need.
+ * @param dailyLimitWei     - Velocity limit in WEI per 24-hour window
+ * @param maxPerTxWei       - Per-transaction limit in WEI (used for policy only;
+ *                            VCR enforces the USDC-denominated limit separately)
  */
 export async function createAgentWallet(
   label: string,
+  passphrase?: string,
+  allowedRecipients?: string[],
+  dailyLimitWei?: string,
+  _maxPerTxWei?: string, // reserved for future per-tx BitGo rule
 ): Promise<BitGoWalletResult> {
   const bitgo = getBitGo();
+
   const enterpriseId = process.env.BITGO_ENTERPRISE_ID;
-  const passphrase = process.env.BITGO_WALLET_PASSPHRASE;
-  if (!enterpriseId || !passphrase) {
+  const walletPassphrase = passphrase ?? process.env.BITGO_WALLET_PASSPHRASE;
+  if (!enterpriseId) throw new Error("BITGO_ENTERPRISE_ID must be set");
+  if (!walletPassphrase)
     throw new Error(
-      "BITGO_ENTERPRISE_ID and BITGO_WALLET_PASSPHRASE must be set",
+      "Wallet passphrase must be provided or BITGO_WALLET_PASSPHRASE must be set",
+    );
+
+  // ── Step 1: Generate wallet ────────────────────────────────────────────────
+  const result = await bitgo.coin("hteth").wallets().generateWallet({
+    label,
+    passphrase: walletPassphrase,
+    enterprise: enterpriseId,
+    walletVersion: 3, // MUST be 3 — v6 requires a support ticket
+    multisigType: "onchain", // MUST be "onchain" — NOT "tss"
+  });
+
+  const wallet = result.wallet;
+  const walletId = wallet.id();
+
+  // userKeychain.prv is ONLY available in this response — never again.
+  const userKeyPrv: string = (result.userKeychain as any)?.prv ?? "";
+
+  // ── Step 2: Wait for on-chain initialization ───────────────────────────────
+  // coinSpecific().pendingChainInitialization must be false before the wallet
+  // can create addresses or submit transactions.
+  // Polls every 10 s for up to 5 minutes (30 attempts).
+  let initialized = false;
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const w = await bitgo.coin("hteth").wallets().get({ id: walletId });
+    const coinSpecific = w.coinSpecific() as
+      | Record<string, unknown>
+      | undefined;
+    if (!coinSpecific?.pendingChainInitialization) {
+      initialized = true;
+      break;
+    }
+    await sleep(10_000);
+  }
+
+  if (!initialized) {
+    throw new Error(
+      `BitGo wallet ${walletId} initialization timed out after 5 minutes. ` +
+        "Check that the enterprise gas tank has sufficient ETH on Hoodi testnet.",
     );
   }
 
-  const result = await bitgo.coin("hteth").wallets().generateWallet({
-    label,
-    passphrase,
-    enterprise: enterpriseId,
-    walletVersion: 3, // MUST be v3 for hackathon accounts
-    multisigType: "onchain", // NOT 'tss' — TSS requires support contact
+  // Re-fetch the wallet after initialization to get the latest state.
+  const liveWallet = await bitgo.coin("hteth").wallets().get({ id: walletId });
+
+  // ── Step 3: Set policy rules ───────────────────────────────────────────────
+  // ⚠️  48-HOUR LOCK — After 48 hours from wallet creation, policy rules are
+  //     IMMUTABLE FOREVER. Add ALL recipient addresses before this window closes.
+  if (allowedRecipients && allowedRecipients.length > 0) {
+    await (liveWallet as any).createPolicyRule({
+      id: "vcr-whitelist",
+      type: "advancedWhitelist",
+      condition: {
+        type: "address",
+        addresses: allowedRecipients,
+        amountString: "0",
+        excludedAddresses: [],
+      },
+      action: { type: "deny" },
+    });
+  }
+
+  if (dailyLimitWei) {
+    await (liveWallet as any).createPolicyRule({
+      id: "vcr-velocity",
+      type: "velocityLimit",
+      condition: {
+        amountString: dailyLimitWei, // MUST be in WEI
+        timeWindow: 86400, // 24 hours in seconds
+        groupBy: ["wallet"],
+      },
+      action: { type: "getApproval" },
+    });
+  }
+
+  // ── Step 4: Create forwarder address ──────────────────────────────────────
+  // The forwarder address is what the agent actually uses for spending.
+  // It is separate from the wallet's default receive address.
+  const forwarderResult = await (liveWallet as any).createAddress({
+    walletVersion: 3,
   });
+  const forwarderAddress: string =
+    forwarderResult?.address ?? forwarderResult?.id ?? "";
 
-  const walletId = result.wallet.id();
-  const coinSpecific = result.wallet.coinSpecific() as
-    | Record<string, unknown>
-    | undefined;
-  const pendingChainInitialization =
-    (coinSpecific?.pendingChainInitialization as boolean) ?? false;
-
-  const walletJson = result.wallet.toJSON() as unknown as Record<string, unknown>;
+  // ── Step 5: Compute policy hash ────────────────────────────────────────────
+  // CRITICAL: Must use deterministic stringify — JSON.stringify key order is
+  // not stable across JS runtimes and will produce different hashes.
+  const livePolicies: unknown = await (liveWallet as any).getPolicies();
+  const policyHash = keccak256(toHex(stringify(livePolicies)));
 
   return {
     walletId,
-    receiveAddress: (walletJson.receiveAddress as any)?.() ?? "",
-    userKeyEncrypted: result.userKeychain?.encryptedPrv ?? "",
-    pendingChainInitialization,
+    forwarderAddress,
+    userKeyPrv, // Caller MUST store this — it is never available again.
+    policyHash,
   };
 }
 
+// ─── Wallet Access ────────────────────────────────────────────────────────────
+
 /**
- * Get a wallet instance by ID.
+ * Get a BitGo wallet instance by ID.
+ * Useful for calling getPolicies(), sendMany(), etc. directly.
  */
 export async function getWallet(walletId: string) {
   const bitgo = getBitGo();
@@ -72,31 +183,32 @@ export async function getWallet(walletId: string) {
 // ─── Policy Management ────────────────────────────────────────────────────────
 
 /**
- * Read the current wallet-level policy.
- * ⚠️  48-HOUR LOCK: policies become immutable 48h after wallet creation.
+ * Read the raw policy object from a BitGo wallet.
+ *
+ * ⚠️  48-HOUR LOCK: policy rules become immutable 48 hours after wallet creation.
  */
 export async function getWalletPolicy(walletId: string): Promise<unknown> {
-  const bitgo = getBitGo();
-  const wallet = await bitgo.coin("hteth").wallets().get({ id: walletId });
-  return wallet.toJSON().coin; // coin-specific policy fields
+  const wallet = await getWallet(walletId);
+  return (wallet as any).getPolicies();
 }
 
 /**
  * Set wallet-level policies (whitelist + velocity + allocation).
  *
- * ⚠️  CRITICAL: All amounts are in WEI (base units), NOT USD.
+ * ⚠️  CRITICAL: All amounts MUST be in WEI (base units), NOT USD.
  *     1 ETH = 1_000_000_000_000_000_000 wei
  *
- * ⚠️  CRITICAL: Once set, policies lock after 48 hours and cannot be changed.
- *     Over-allocate limits to give yourself flexibility.
+ * ⚠️  CRITICAL: Policy rules lock 48 hours after wallet creation.
+ *     Over-allocate limits now — you cannot change them later.
+ *
+ * Prefer `createAgentWallet()` which sets policies at creation time.
+ * Use this function only within the 48-hour window to add/adjust rules.
  */
 export async function setWalletPolicy(
   walletId: string,
   policy: BitGoPolicy,
 ): Promise<unknown> {
-  const bitgo = getBitGo();
-  const wallet = await bitgo.coin("hteth").wallets().get({ id: walletId });
-
+  const wallet = await getWallet(walletId);
   const rules: unknown[] = [];
 
   if (policy.advancedWhitelist && policy.advancedWhitelist.length > 0) {
@@ -119,8 +231,7 @@ export async function setWalletPolicy(
       type: "velocityLimit",
       action: { type: "getApproval" },
       condition: {
-        // Amount in WEI as string
-        amountString: policy.velocityLimit.amount,
+        amountString: policy.velocityLimit.amount, // WEI as string
         timeWindow: policy.velocityLimit.timeWindow,
         groupBy: ["wallet"],
       },
@@ -133,7 +244,7 @@ export async function setWalletPolicy(
       type: "allocationLimit",
       action: { type: "getApproval" },
       condition: {
-        amountString: policy.allocationLimit.amount,
+        amountString: policy.allocationLimit.amount, // WEI as string
       },
     });
   }
@@ -150,24 +261,32 @@ export interface SendResult {
 }
 
 /**
- * Send a transaction via BitGo wallet.
+ * Send a transaction via BitGo sendMany.
  * Amount must be in WEI as a string.
- * Returns txid if approved immediately, or pendingApproval ID if policy-blocked.
+ *
+ * Returns txid if approved immediately, or pendingApproval ID if a policy
+ * rule (velocity, whitelist) blocks the transaction for review.
+ *
+ * VCR RULE: Always call canAgentSpend() BEFORE calling this function.
+ * BitGo is the last line of defense, not the first.
  */
 export async function sendTransaction(
   walletId: string,
   recipientAddress: string,
   amountWei: string,
+  passphrase?: string,
 ): Promise<SendResult> {
-  const bitgo = getBitGo();
-  const passphrase = process.env.BITGO_WALLET_PASSPHRASE;
-  if (!passphrase) throw new Error("BITGO_WALLET_PASSPHRASE not set");
+  const walletPassphrase = passphrase ?? process.env.BITGO_WALLET_PASSPHRASE;
+  if (!walletPassphrase)
+    throw new Error(
+      "Wallet passphrase must be provided or BITGO_WALLET_PASSPHRASE must be set",
+    );
 
-  const wallet = await bitgo.coin("hteth").wallets().get({ id: walletId });
+  const wallet = await getWallet(walletId);
 
-  const result = (await wallet.sendMany({
+  const result = (await (wallet as any).sendMany({
     recipients: [{ address: recipientAddress, amount: amountWei }],
-    walletPassphrase: passphrase,
+    walletPassphrase,
   })) as Record<string, unknown>;
 
   if (result.txid) {
@@ -184,50 +303,81 @@ export async function sendTransaction(
 
 // ─── Pending Approvals ────────────────────────────────────────────────────────
 
+/**
+ * Approve a pending BitGo transaction.
+ * OTP for the test environment is EXACTLY 7 zeroes: "0000000"
+ * (6 zeroes = wrong, will be rejected)
+ */
 export async function approvePendingApproval(
   approvalId: string,
+  passphrase?: string,
 ): Promise<unknown> {
   const bitgo = getBitGo();
-  // OTP for test env is EXACTLY 7 zeroes
-  return (bitgo as any)
+  const walletPassphrase = passphrase ?? process.env.BITGO_WALLET_PASSPHRASE;
+
+  const approval = await (bitgo as any)
     .pendingApprovals()
-    .get({ id: approvalId })
-    .then((approval: any) =>
-      approval.approve({
-        walletPassphrase: process.env.BITGO_WALLET_PASSPHRASE,
-        otp: "0000000",
-      }),
-    );
+    .get({ id: approvalId });
+
+  return approval.approve({
+    walletPassphrase,
+    otp: "0000000", // EXACTLY 7 zeroes for BitGo test environment
+  });
 }
 
+/**
+ * Reject a pending BitGo transaction approval.
+ */
 export async function rejectPendingApproval(
   approvalId: string,
 ): Promise<unknown> {
   const bitgo = getBitGo();
-  return (bitgo as any)
+  const approval = await (bitgo as any)
     .pendingApprovals()
-    .get({ id: approvalId })
-    .then((approval: any) => approval.reject());
+    .get({ id: approvalId });
+  return approval.reject();
 }
 
+// ─── Webhooks ─────────────────────────────────────────────────────────────────
+
 /**
- * Verify a BitGo webhook HMAC signature.
- * Token is found in X-Signature header of the webhook request.
+ * Verify a BitGo webhook HMAC-SHA256 signature.
+ * The signature is found in the X-Signature header of the webhook request.
+ * Uses constant-time comparison to prevent timing attacks.
  */
 export async function verifyWebhookSignature(
   payload: string,
   signature: string,
   secret: string,
 ): Promise<boolean> {
-  const crypto = await import("crypto");
-  const hmac = crypto.createHmac("sha256", secret);
+  const { createHmac } = await import("crypto");
+  const hmac = createHmac("sha256", secret);
   hmac.update(payload);
   const expected = hmac.digest("hex");
-  // Constant-time comparison to prevent timing attacks
+
   if (expected.length !== signature.length) return false;
   try {
-    return timingSafeEqual(Buffer.from(expected, "hex"), Buffer.from(signature, "hex"));
+    return timingSafeEqual(
+      Buffer.from(expected, "hex"),
+      Buffer.from(signature, "hex"),
+    );
   } catch {
     return false;
   }
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * Compute the keccak256 integrity hash of a live BitGo policy object.
+ * Used to populate the `policy_hash` field in a VCRPolicy document.
+ *
+ * CRITICAL: Uses json-stringify-deterministic — JSON.stringify is NOT stable.
+ */
+export function computeBitGoPolicyHash(livePolicies: unknown): string {
+  return keccak256(toHex(stringify(livePolicies)));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

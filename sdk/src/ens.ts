@@ -9,7 +9,7 @@ import {
 import { sepolia } from "viem/chains";
 import { normalize, namehash } from "viem/ens";
 import { privateKeyToAccount } from "viem/accounts";
-import type { ENSSetResult } from "./types.js";
+import type { ENSSetResult, LinkVerificationResult } from "./types.js";
 
 // ─── Contract Addresses ───────────────────────────────────────────────────────
 
@@ -21,7 +21,8 @@ export const ENS_ADDRESSES = {
 } as const;
 
 // ERC-8004 IdentityRegistry — Sepolia testnet
-export const ERC8004_REGISTRY_SEPOLIA = "0x8004A818BFB912233c491871b3d84c89A494BD9e" as const;
+export const ERC8004_REGISTRY_SEPOLIA =
+  "0x8004A818BFB912233c491871b3d84c89A494BD9e" as const;
 
 /**
  * Encode an EVM address + chainId into ERC-7930 binary format.
@@ -45,12 +46,14 @@ export function encodeERC7930(chainId: number, address: string): string {
   // Encode chainId as big-endian minimal bytes
   const chainRefBytes = chainIdToMinimalBytes(chainId);
   const chainRefLen = chainRefBytes.length;
-  const chainRefHex = chainRefBytes.map((b) => b.toString(16).padStart(2, "0")).join("");
+  const chainRefHex = chainRefBytes
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 
-  const version = "0001";          // Version 1 (2 bytes)
-  const chainType = "0000";        // EVM chain type (2 bytes)
+  const version = "0001"; // Version 1 (2 bytes)
+  const chainType = "0000"; // EVM chain type (2 bytes)
   const chainRefLenHex = chainRefLen.toString(16).padStart(2, "0");
-  const addrLen = "14";            // 20 bytes
+  const addrLen = "14"; // 20 bytes
 
   return `0x${version}${chainType}${chainRefLenHex}${chainRefHex}${addrLen}${addrHex}`;
 }
@@ -78,7 +81,7 @@ function chainIdToMinimalBytes(chainId: number): number[] {
 export function buildAgentRegistrationKey(
   registryAddress: string,
   chainId: number,
-  agentId: number
+  agentId: number,
 ): string {
   const encoded = encodeERC7930(chainId, registryAddress);
   return `agent-registration[${encoded}][${agentId}]`;
@@ -95,9 +98,14 @@ function getPublicClient() {
 function getWalletClient() {
   const rpcUrl = process.env.SEPOLIA_RPC_URL;
   const privateKey = process.env.PRIVATE_KEY as `0x${string}`;
-  if (!rpcUrl || !privateKey) throw new Error("SEPOLIA_RPC_URL and PRIVATE_KEY must be set");
+  if (!rpcUrl || !privateKey)
+    throw new Error("SEPOLIA_RPC_URL and PRIVATE_KEY must be set");
   const account = privateKeyToAccount(privateKey);
-  return createWalletClient({ account, chain: sepolia, transport: http(rpcUrl) });
+  return createWalletClient({
+    account,
+    chain: sepolia,
+    transport: http(rpcUrl),
+  });
 }
 
 // ─── Text Record ABI ──────────────────────────────────────────────────────────
@@ -114,7 +122,7 @@ const resolverAbi = parseAbi([
  */
 export async function setVCRPolicyRecord(
   ensName: string,
-  policyUri: string
+  policyUri: string,
 ): Promise<ENSSetResult> {
   const walletClient = getWalletClient();
   const node = namehash(normalize(ensName));
@@ -138,7 +146,7 @@ export async function setAgentRegistrationRecord(
   ensName: string,
   agentId: number,
   registryAddress = ERC8004_REGISTRY_SEPOLIA,
-  chainId = 11155111
+  chainId = 11155111,
 ): Promise<ENSSetResult> {
   const walletClient = getWalletClient();
   const node = namehash(normalize(ensName));
@@ -163,7 +171,7 @@ export async function setAllENSRecords(
   agentId: number,
   policyUri: string,
   registryAddress = ERC8004_REGISTRY_SEPOLIA,
-  chainId = 11155111
+  chainId = 11155111,
 ): Promise<{ txHash: string }> {
   const walletClient = getWalletClient();
   const node = namehash(normalize(ensName));
@@ -213,7 +221,7 @@ export async function getAgentRegistrationRecord(
   ensName: string,
   agentId: number,
   registryAddress = ERC8004_REGISTRY_SEPOLIA,
-  chainId = 11155111
+  chainId = 11155111,
 ): Promise<string | null> {
   const publicClient = getPublicClient();
   const key = buildAgentRegistrationKey(registryAddress, chainId, agentId);
@@ -223,16 +231,110 @@ export async function getAgentRegistrationRecord(
   });
 }
 
+// ABI fragment used for ownership cross-check in verifyAgentENSLink
+const identityRegistryReadAbi = parseAbi([
+  "function getOwner(uint256 agentId) external view returns (address)",
+]);
+
 /**
- * Verify the bidirectional ENS ↔ ERC-8004 link.
- * Returns true only if the text record value is "1".
+ * Verify the bidirectional ENS ↔ ERC-8004 link per ENSIP-25.
+ *
+ * Performs three checks:
+ *   1. The ENSIP-25 agent-registration text record exists and is non-empty
+ *      (ENSIP-25 only requires non-empty; VCR convention is "1")
+ *   2. The ERC-8004 registry confirms ownership of the agentId
+ *   3. The ENS name's resolved address matches the registry agent owner
+ *      (proves the ENS name is controlled by the same party as the ERC-8004 entry)
+ *
+ * Returns a full {@link LinkVerificationResult} describing the outcome.
+ *
+ * @param ensName         - e.g. "researcher-001.acmecorp.eth"
+ * @param agentId         - ERC-8004 agentId (starts from 0)
+ * @param registryAddress - Defaults to ERC-8004 Sepolia IdentityRegistry
+ * @param chainId         - Defaults to 11155111 (Sepolia)
  */
 export async function verifyAgentENSLink(
   ensName: string,
   agentId: number,
   registryAddress = ERC8004_REGISTRY_SEPOLIA,
-  chainId = 11155111
-): Promise<boolean> {
-  const record = await getAgentRegistrationRecord(ensName, agentId, registryAddress, chainId);
-  return record === "1";
+  chainId = 11155111,
+): Promise<LinkVerificationResult> {
+  const publicClient = getPublicClient();
+
+  // ── Check 1: ENSIP-25 agent-registration text record ──────────────────────
+  const key = buildAgentRegistrationKey(registryAddress, chainId, agentId);
+  const ensRecord = await publicClient.getEnsText({
+    name: normalize(ensName),
+    key,
+  });
+
+  if (!ensRecord) {
+    return {
+      valid: false,
+      reason: `ENSIP-25 record not set. Key: ${key}`,
+      ensRecord: ensRecord ?? undefined,
+    };
+  }
+
+  // ── Check 2: ERC-8004 registry ownership ─────────────────────────────────
+  let registryOwner: string;
+  try {
+    registryOwner = (await publicClient.readContract({
+      address: registryAddress as `0x${string}`,
+      abi: identityRegistryReadAbi,
+      functionName: "getOwner",
+      args: [BigInt(agentId)],
+    })) as string;
+  } catch (err) {
+    return {
+      valid: false,
+      reason: `ERC-8004 registry lookup failed: ${(err as Error).message}`,
+      ensRecord,
+    };
+  }
+
+  // ── Check 3: ENS addr record matches ERC-8004 agent owner ─────────────────
+  // The ENS name's addr record should resolve to the same address that
+  // owns the agentId in the ERC-8004 registry, proving the link is bidirectional.
+  let ensOwner: string | null;
+  try {
+    ensOwner = await publicClient.getEnsAddress({
+      name: normalize(ensName),
+    });
+  } catch (err) {
+    return {
+      valid: false,
+      reason: `ENS address resolution failed: ${(err as Error).message}`,
+      ensRecord,
+      registryOwner,
+    };
+  }
+
+  if (!ensOwner) {
+    return {
+      valid: false,
+      reason: `ENS name "${ensName}" does not resolve to an address`,
+      ensRecord,
+      registryOwner,
+    };
+  }
+
+  if (registryOwner.toLowerCase() !== ensOwner.toLowerCase()) {
+    return {
+      valid: false,
+      reason:
+        `Owner mismatch — ERC-8004 registry owner (${registryOwner}) ` +
+        `does not match ENS addr record (${ensOwner})`,
+      ensRecord,
+      registryOwner,
+      ensOwner,
+    };
+  }
+
+  return {
+    valid: true,
+    ensRecord,
+    registryOwner,
+    ensOwner,
+  };
 }
