@@ -1,52 +1,25 @@
 const hre = require("hardhat");
-const fs = require("fs");
-const path = require("path");
 
 async function main() {
-  try {
-    const [deployer] = await hre.ethers.getSigners();
-    console.log("Deploying with:", deployer.address);
-    console.log("Network:", hre.network.name);
+  const [deployer] = await hre.ethers.getSigners();
+  console.log("Deploying VCRPolicyRegistry with account:", deployer.address);
 
-    // Deploy Lock
-    console.log("\nDeploying Lock...");
-    const Lock = await hre.ethers.getContractFactory("Lock");
-    const lock = await Lock.deploy();
-    await lock.waitForDeployment();
-    const lockAddress = await lock.getAddress();
-    console.log("Lock deployed to:", lockAddress);
-    const abi = JSON.parse(lock.interface.formatJson());
-    // Save deployment info
-    const deploymentInfo = {
-      network: hre.network.name,
-      deployer: deployer.address,
-      deploymentTime: new Date().toISOString(),
-      contracts: {
-        lock: {
-          address: lockAddress,
-          unlockTime: unlockTime,
-          abi: abi,
-          unlockTimeReadable: new Date(unlockTime * 1000).toISOString()
-        }
-      }
-    };
-    console.log("\nDeployment info:", deploymentInfo);
-    console.log("Dirname: ", __dirname);
-    const deploymentPath = path.join(__dirname, "..", "deployment.json");
-    fs.writeFileSync(deploymentPath, JSON.stringify(deploymentInfo, null, 2));
-    console.log("\nSaved deployment info to:", deploymentPath);
+  const balance = await hre.ethers.provider.getBalance(deployer.address);
+  console.log("Balance:", hre.ethers.formatEther(balance), "ETH");
 
-    console.log("\nDone.");
-    console.log("Lock:", lockAddress);
-  } catch (error) {
-    console.error("Deployment failed:", error);
-    process.exit(1);
-  }
+  const VCRPolicyRegistry = await hre.ethers.getContractFactory("VCRPolicyRegistry");
+  const registry = await VCRPolicyRegistry.deploy();
+  await registry.waitForDeployment();
+
+  const address = await registry.getAddress();
+  console.log("\n✅ VCRPolicyRegistry deployed to:", address);
+  console.log("   Network:", hre.network.name);
+  console.log("   Block:", (await hre.ethers.provider.getBlockNumber()));
+  console.log("\nVerify on Etherscan:");
+  console.log(`   npx hardhat verify --network ${hre.network.name} ${address}`);
 }
 
-main()
-  .then(() => process.exit(0))
-  .catch((error) => {
-    console.error(error);
-    process.exit(1);
-  });
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

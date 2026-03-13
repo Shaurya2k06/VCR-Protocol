@@ -1,53 +1,37 @@
 require("@nomicfoundation/hardhat-toolbox");
-require("dotenv").config();
-
-const { ALCHEMY_API_KEY, ETHERSCAN_API_KEY, PRIVATE_KEY } = process.env;
+require("dotenv").config({ path: ".env" });
 
 /** @type import('hardhat/config').HardhatUserConfig */
 module.exports = {
   solidity: {
     version: "0.8.28",
     settings: {
-      optimizer: {
-        enabled: true,
-        runs: 200,
-      },
-      viaIR: true,
+      optimizer: { enabled: true, runs: 200 },
+    },
+  },
+  networks: {
+    // Ethereum Sepolia — for ERC-8004 + VCRPolicyRegistry
+    sepolia: {
+      url: process.env.SEPOLIA_RPC_URL || "",
+      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
+      chainId: 11155111,
+    },
+    // Hoodi testnet — for BitGo hteth
+    hoodi: {
+      url: "https://rpc.hoodi.ethpandaops.io",
+      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
+      chainId: 560048,
+    },
+  },
+  etherscan: {
+    apiKey: {
+      sepolia: process.env.ETHERSCAN_API_KEY || "",
     },
   },
   paths: {
     sources: "./contracts",
+    tests: "./test",
     cache: "./cache",
-    artifacts: "./artifacts"
+    artifacts: "./artifacts",
   },
-  etherscan: {
-    apiKey: ETHERSCAN_API_KEY
-  },
-  networks: {
-    localhost: {
-      url: "http://127.0.0.1:8545",
-      accounts: {
-        mnemonic: "test test test test test test test test test test test junk",
-        path: "m/44'/60'/0'/0",
-        initialIndex: 0,
-        count: 20,
-      }
-    },
-    sepolia: {
-      url: `https://rpc.sepolia.ethpandaops.io`,
-      accounts: [`0x${PRIVATE_KEY}`],
-      chainId: 11155111,
-    }
-    // hardhat: {
-    //   // This is the default network when you run `npx hardhat test`
-    //   // Remove gas limits to allow unlimited gas for testing
-    //   accounts: {
-    //     mnemonic: "test test test test test test test test test test test junk",
-    //     path: "m/44'/60'/0'/0",
-    //     initialIndex: 0,
-    //     count: 20,
-    //     accountsBalance: "10000000000000000000000",
-    //   }
-    // }
-  }
 };
