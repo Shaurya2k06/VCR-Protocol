@@ -1,10 +1,13 @@
 {
-    "name": "@vcr-protocol/sdk",
-    "version": "1.0.0",
+    "name": "@shaurya2k06/vcrsdk",
+    "version": "1.0.2",
     "description": "VCR Protocol SDK — Policy-bound autonomous agent wallets with on-chain verification, ENS integration, x402 payments, and BitGo enforcement.",
     "type": "module",
     "main": "dist/index.js",
     "types": "dist/index.d.ts",
+    "publishConfig": {
+        "access": "public"
+    },
     "exports": {
         ".": {
             "import": "./dist/index.js",
