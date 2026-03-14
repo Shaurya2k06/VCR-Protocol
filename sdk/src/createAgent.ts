@@ -277,7 +277,16 @@ export async function createAgent(
   // ── Bonus: Link BitGo forwarder to ERC-8004 agent ─────────────────────────
   console.log("    Linking BitGo forwarder to ERC-8004 agent via EIP-712…");
   try {
-    await setAgentWallet(agentId, bitgoResult.forwarderAddress as `0x${string}`);
+    // ERC-8004 requires the NEW wallet (BitGo forwarder) to sign, not the owner.
+    // Fetch the live BitGo wallet object so we can call signTypedData() on it.
+    const { getWallet } = await import("./bitgo.js");
+    const bitgoWallet = await getWallet(bitgoResult.walletId);
+    await setAgentWallet(
+      agentId,
+      bitgoResult.forwarderAddress as `0x${string}`,
+      bitgoWallet as any,
+      walletPassphrase,
+    );
     console.log(`   ✅  Agent wallet set to ${bitgoResult.forwarderAddress}`);
   } catch (err) {
     // Non-fatal — the link can be set separately if the contract doesn't
