@@ -8,11 +8,60 @@ interface DocViewerProps {
   cid: string;
 }
 
+type JsonObject = Record<string, unknown>;
+type DdocContent = JsonObject & {
+  type: "doc";
+  content: unknown[];
+};
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isDdocContent(value: unknown): value is DdocContent {
+  return (
+    isJsonObject(value) &&
+    value.type === "doc" &&
+    Array.isArray((value as JsonObject).content)
+  );
+}
+
+function createTextParagraph(text: string): JsonObject {
+  return {
+    type: "paragraph",
+    content: [{ type: "text", text: text.length ? text : " " }],
+  };
+}
+
+function normalizeToDdocContent(value: unknown): {
+  content: DdocContent;
+  normalizedFromNonNative: boolean;
+} {
+  if (isDdocContent(value)) {
+    return {
+      content: value,
+      normalizedFromNonNative: false,
+    };
+  }
+
+  const raw = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  const lines = raw ? raw.split("\n").slice(0, 500) : ["Empty document"];
+
+  return {
+    normalizedFromNonNative: true,
+    content: {
+      type: "doc",
+      content: lines.map(createTextParagraph),
+    },
+  };
+}
+
 export default function DocViewer({ cid }: DocViewerProps) {
-  const [documentContent, setDocumentContent] = useState<unknown | null>(null);
+  const [documentContent, setDocumentContent] = useState<DdocContent | null>(null);
   const [documentMeta, setDocumentMeta] = useState<StoredDoc | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [normalizedFromNonNative, setNormalizedFromNonNative] = useState(false);
 
   const rawIpfsUrl = useMemo(() => buildIpfsGatewayUrl(cid), [cid]);
 
@@ -37,7 +86,9 @@ export default function DocViewer({ cid }: DocViewerProps) {
           throw ipfsResult.reason;
         }
 
-        setDocumentContent(ipfsResult.value);
+        const normalized = normalizeToDdocContent(ipfsResult.value);
+        setDocumentContent(normalized.content);
+        setNormalizedFromNonNative(normalized.normalizedFromNonNative);
 
         if (dbResult.status === "fulfilled") {
           setDocumentMeta(dbResult.value);
@@ -50,6 +101,7 @@ export default function DocViewer({ cid }: DocViewerProps) {
         }
 
         setDocumentContent(null);
+        setNormalizedFromNonNative(false);
         setError((viewError as Error).message || "Failed to load document");
       } finally {
         if (active) {
@@ -117,6 +169,12 @@ export default function DocViewer({ cid }: DocViewerProps) {
         </a>
       </div>
 
+      {normalizedFromNonNative && (
+        <div className="alert alert-warning" style={{ marginBottom: 16 }}>
+          This file was not native dDoc editor JSON. It has been converted to a safe read-only preview.
+        </div>
+      )}
+
       <div
         style={{
           border: "3px solid var(--nb-ink)",
@@ -126,6 +184,7 @@ export default function DocViewer({ cid }: DocViewerProps) {
         }}
       >
         <DdocEditor
+          key={`${cid}-${normalizedFromNonNative ? "fallback" : "native"}`}
           initialContent={documentContent}
           isPreviewMode={true}
           editorCanvasClassNames="max-w-3xl mx-auto"

@@ -9,8 +9,8 @@ import verifyRouter from "./routes/verify.js";
 import registerRouter from "./routes/register.js";
 import demoRouter from "./routes/demo.js";
 import walletRouter from "./routes/wallet.js";
-import ipfsRouter from "./routes/ipfs.js";
-import documentsRouter from "./routes/documents.js";
+import ipfsRouter from "./routes/ipfsUpload.js";
+import documentsRouter from "./routes/documentRoutes.js";
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? "3001");

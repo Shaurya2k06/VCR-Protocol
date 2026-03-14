@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { vcr } from "../../lib/api";
+import { buildIpfsGatewayUrl, extractCidFromValue } from "../../utils/ipfs";
 
 function getWalletProvider() {
   if (typeof window === "undefined") {
@@ -23,6 +25,22 @@ function formatDate(value) {
   }
 }
 
+function toGatewayUrl(value = "") {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  if (!normalized) return "";
+
+  const cid = extractCidFromValue(normalized);
+  if (cid) {
+    return buildIpfsGatewayUrl(cid);
+  }
+
+  return normalized;
+}
+
+function toReadableCid(value = "") {
+  return extractCidFromValue(value) || "";
+}
+
 function fileToDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -42,6 +60,13 @@ function buildProfileUpdateMessage(agentId, ensName, issuedAt) {
 }
 
 function AgentCard({ agent, onSelect, owned }) {
+  const headerImageUrl = toGatewayUrl(agent.headerUri || "");
+  const avatarImageUrl = toGatewayUrl(agent.avatarUri || "");
+  const rulesDocLink = toGatewayUrl(agent.rulesDocumentUrl || "");
+  const policyCid = agent.policyCid || toReadableCid(agent.policyUri || "") || "Not available";
+  const rulesDocCid = toReadableCid(agent.rulesDocumentUrl || "") || "Not available";
+  const hasRulesDoc = Boolean(rulesDocLink || rulesDocCid !== "Not available");
+
   return (
     <button
       type="button"
@@ -56,12 +81,12 @@ function AgentCard({ agent, onSelect, owned }) {
           : "var(--nb-board)",
       }}
     >
-      {agent.headerUri ? (
+      {headerImageUrl ? (
         <div
           style={{
             height: 140,
             borderRadius: 18,
-            backgroundImage: `linear-gradient(rgba(17,24,39,0.18), rgba(17,24,39,0.18)), url(${agent.headerUri})`,
+            backgroundImage: `linear-gradient(rgba(17,24,39,0.18), rgba(17,24,39,0.18)), url(${headerImageUrl})`,
             backgroundSize: "cover",
             backgroundPosition: "center",
             border: "3px solid var(--nb-ink)",
@@ -93,9 +118,9 @@ function AgentCard({ agent, onSelect, owned }) {
             flexShrink: 0,
           }}
         >
-          {agent.avatarUri ? (
+          {avatarImageUrl ? (
             <img
-              src={agent.avatarUri}
+              src={avatarImageUrl}
               alt={agent.name}
               style={{ width: "100%", height: "100%", objectFit: "cover" }}
             />
@@ -120,6 +145,7 @@ function AgentCard({ agent, onSelect, owned }) {
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
             <span className="badge badge-blue">Agent #{agent.agentId}</span>
             {owned ? <span className="badge badge-purple">My agent</span> : null}
+            {hasRulesDoc ? <span className="badge badge-gray">dDoc linked</span> : null}
           </div>
           <h2 style={{ fontSize: "1.25rem", marginBottom: 6 }}>{agent.ensName || agent.name}</h2>
           <p style={{ color: "var(--text-muted)", fontSize: "0.88rem", marginBottom: 10 }}>
@@ -132,6 +158,14 @@ function AgentCard({ agent, onSelect, owned }) {
             {(agent.supportedChains || []).map((chain) => (
               <span key={chain} className="badge badge-gray">{chain}</span>
             ))}
+          </div>
+          <div style={{ marginTop: 10, display: "grid", gap: 4 }}>
+            <p className="mono" style={{ fontSize: "0.72rem", opacity: 0.8 }}>
+              Policy CID: {policyCid}
+            </p>
+            <p className="mono" style={{ fontSize: "0.72rem", opacity: 0.8 }}>
+              dDoc CID: {rulesDocCid}
+            </p>
           </div>
         </div>
       </div>
@@ -157,6 +191,8 @@ export default function PolicyExplorer() {
   const [avatarPreview, setAvatarPreview] = useState("");
   const [headerPreview, setHeaderPreview] = useState("");
   const [uploadingProfile, setUploadingProfile] = useState(false);
+  const [loadingEnsRecords, setLoadingEnsRecords] = useState(false);
+  const [ensRecords, setEnsRecords] = useState(null);
 
   const connectWallet = async () => {
     const provider = getWalletProvider();
@@ -294,6 +330,63 @@ export default function PolicyExplorer() {
       selectedAgent.creatorAddress?.toLowerCase() === address
     );
   }, [selectedAgent, wallet.address]);
+
+  const selectedAgentUriLink = selectedAgent
+    ? toGatewayUrl(selectedAgent.agentUri || "")
+    : "";
+  const selectedPolicyCid = selectedAgent
+    ? selectedAgent.policyCid || toReadableCid(selectedAgent.policyUri || "") || ""
+    : "";
+  const selectedPolicyLink = selectedAgent
+    ? toGatewayUrl(selectedAgent.policyUri || selectedPolicyCid)
+    : "";
+  const selectedRulesDocCid = selectedAgent
+    ? toReadableCid(selectedAgent.rulesDocumentUrl || "")
+    : "";
+  const selectedRulesDocLink = selectedAgent
+    ? toGatewayUrl(selectedAgent.rulesDocumentUrl || "")
+    : "";
+  const selectedRulesDocViewUrl = selectedRulesDocLink || selectedAgent?.rulesDocumentUrl || "";
+  const selectedRulesDocRawPreview = selectedAgent?.rulesDocumentRaw
+    ? String(selectedAgent.rulesDocumentRaw).slice(0, 220)
+    : "";
+  const selectedAvatarLink = selectedAgent
+    ? toGatewayUrl(selectedAgent.avatarUri || "")
+    : "";
+  const selectedHeaderLink = selectedAgent
+    ? toGatewayUrl(selectedAgent.headerUri || "")
+    : "";
+
+  useEffect(() => {
+    if (!selectedAgent?.agentId) {
+      setEnsRecords(null);
+      return;
+    }
+
+    let active = true;
+
+    async function loadEnsRecords() {
+      setLoadingEnsRecords(true);
+      try {
+        const response = await vcr.getAgentEnsRecords(selectedAgent.agentId);
+        if (!active) return;
+        setEnsRecords(response.records ?? null);
+      } catch (recordsError) {
+        if (!active) return;
+        setEnsRecords({ error: recordsError.message });
+      } finally {
+        if (active) {
+          setLoadingEnsRecords(false);
+        }
+      }
+    }
+
+    loadEnsRecords();
+
+    return () => {
+      active = false;
+    };
+  }, [selectedAgent?.agentId]);
 
   const handleAvatarChange = async (event) => {
     const file = event.target.files?.[0];
@@ -579,13 +672,13 @@ export default function PolicyExplorer() {
                 </button>
               </div>
 
-              {selectedAgent.headerUri ? (
+              {selectedHeaderLink ? (
                 <div
                   style={{
                     height: 200,
                     borderRadius: 18,
                     marginBottom: 20,
-                    backgroundImage: `url(${selectedAgent.headerUri})`,
+                    backgroundImage: `url(${selectedHeaderLink})`,
                     backgroundSize: "cover",
                     backgroundPosition: "center",
                     border: "3px solid var(--nb-ink)",
@@ -617,9 +710,63 @@ export default function PolicyExplorer() {
                     ))}
                   </div>
                   <div style={{ display: "grid", gap: 10 }}>
-                    <div className="code-block">Policy URI: {selectedAgent.policyUri || "Not available"}</div>
+                    <div className="code-block">Policy URI: {selectedPolicyLink || "Not available"}</div>
+                    <div className="code-block">Policy CID: {selectedPolicyCid || "Not available"}</div>
                     <div className="code-block">Registration tx: {selectedAgent.registrationTxHash || selectedAgent.registrationTx || "Not available"}</div>
                   </div>
+                </div>
+              </div>
+
+              <div className="card" style={{ marginTop: 20, marginBottom: 0 }}>
+                <div className="card-header"><h2>Documents & ENS records</h2></div>
+
+                <div style={{ display: "grid", gap: 10 }}>
+                  <div className="code-block">Agent URI: {selectedAgentUriLink || "Not available"}</div>
+                  <div className="code-block">Rules dDoc URL: {selectedRulesDocLink || selectedAgent.rulesDocumentUrl || "Not available"}</div>
+                  <div className="code-block">Rules dDoc CID: {selectedRulesDocCid || "Not available"}</div>
+                  <div className="code-block">Rules raw snapshot: {selectedRulesDocRawPreview || "Not available"}</div>
+                  <div className="code-block">Rules source: {selectedAgent.rulesDocumentSource || "Not available"}</div>
+                  <div className="code-block">Avatar URI (DB): {selectedAvatarLink || "Not available"}</div>
+                  <div className="code-block">Header URI (DB): {selectedHeaderLink || "Not available"}</div>
+                </div>
+
+                <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 16 }}>
+                  {selectedRulesDocCid ? (
+                    <Link to={`/doc/${selectedRulesDocCid}`} className="btn btn-primary">
+                      View dDoc
+                    </Link>
+                  ) : selectedRulesDocViewUrl ? (
+                    <a href={selectedRulesDocViewUrl} target="_blank" rel="noreferrer" className="btn btn-primary">
+                      View dDoc
+                    </a>
+                  ) : null}
+                  {selectedRulesDocLink && selectedRulesDocCid ? (
+                    <a href={selectedRulesDocLink} target="_blank" rel="noreferrer" className="btn btn-ghost">
+                      Open raw dDoc
+                    </a>
+                  ) : null}
+                  {selectedPolicyLink ? (
+                    <a href={selectedPolicyLink} target="_blank" rel="noreferrer" className="btn btn-ghost">
+                      Open policy IPFS
+                    </a>
+                  ) : null}
+                </div>
+
+                <div style={{ marginTop: 18 }}>
+                  <h3 style={{ marginBottom: 10 }}>Live ENS text records</h3>
+                  {loadingEnsRecords ? (
+                    <p>Loading live ENS records...</p>
+                  ) : ensRecords?.error ? (
+                    <div className="alert alert-error">{ensRecords.error}</div>
+                  ) : (
+                    <div style={{ display: "grid", gap: 10 }}>
+                      <div className="code-block">agent-registration: {ensRecords?.agentRegistration || "Not set"}</div>
+                      <div className="code-block">contenthash policy: {ensRecords?.policyContenthashUri || "Not set"}</div>
+                      <div className="code-block">vcr.policy text: {ensRecords?.legacyPolicyText || "Not set"}</div>
+                      <div className="code-block">avatar text: {ensRecords?.avatar || "Not set"}</div>
+                      <div className="code-block">header text: {ensRecords?.header || "Not set"}</div>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -637,9 +784,9 @@ export default function PolicyExplorer() {
                       <label className="form-label">Avatar image</label>
                       <input type="file" accept="image/*" onChange={handleAvatarChange} />
                       <div style={{ marginTop: 16 }}>
-                        {avatarPreview || selectedAgent.avatarUri ? (
+                        {avatarPreview || selectedAvatarLink ? (
                           <img
-                            src={avatarPreview || selectedAgent.avatarUri}
+                            src={avatarPreview || selectedAvatarLink}
                             alt="Avatar preview"
                             style={{
                               width: 140,
@@ -660,12 +807,12 @@ export default function PolicyExplorer() {
                       <label className="form-label">Header image</label>
                       <input type="file" accept="image/*" onChange={handleHeaderChange} />
                       <div style={{ marginTop: 16 }}>
-                        {headerPreview || selectedAgent.headerUri ? (
+                        {headerPreview || selectedHeaderLink ? (
                           <div
                             style={{
                               height: 140,
                               borderRadius: 18,
-                              backgroundImage: `url(${headerPreview || selectedAgent.headerUri})`,
+                              backgroundImage: `url(${headerPreview || selectedHeaderLink})`,
                               backgroundSize: "cover",
                               backgroundPosition: "center",
                               border: "3px solid var(--nb-ink)",
@@ -683,13 +830,13 @@ export default function PolicyExplorer() {
                     <button type="button" className="btn btn-primary" onClick={uploadProfile} disabled={uploadingProfile}>
                       {uploadingProfile ? "Uploading..." : "Upload to ENS profile"}
                     </button>
-                    {selectedAgent.avatarUri ? (
-                      <a href={selectedAgent.avatarUri} target="_blank" rel="noreferrer" className="btn btn-ghost">
+                    {selectedAvatarLink ? (
+                      <a href={selectedAvatarLink} target="_blank" rel="noreferrer" className="btn btn-ghost">
                         Open avatar
                       </a>
                     ) : null}
-                    {selectedAgent.headerUri ? (
-                      <a href={selectedAgent.headerUri} target="_blank" rel="noreferrer" className="btn btn-ghost">
+                    {selectedHeaderLink ? (
+                      <a href={selectedHeaderLink} target="_blank" rel="noreferrer" className="btn btn-ghost">
                         Open header
                       </a>
                     ) : null}

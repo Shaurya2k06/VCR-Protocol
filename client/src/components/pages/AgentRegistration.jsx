@@ -1,16 +1,52 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { DdocEditor } from "@fileverse-dev/ddoc";
 import { vcr } from "../../lib/api";
 import { createStoredDocument } from "../../utils/api";
+import { createAgentDoc } from "../../utils/createDocJSON";
 import { buildIpfsGatewayUrl, extractCidFromValue, uploadDocumentToIPFS } from "../../utils/ipfs";
 
 
-function buildDefaultRulesDocumentSnapshot() {
-  return {
-    rules: []
+function isJsonObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isDdocContent(value) {
+  return isJsonObject(value) && value.type === "doc" && Array.isArray(value.content);
+}
+
+function buildDefaultRulesDocumentSnapshot(seed = {}) {
+  if (isDdocContent(seed)) {
+    return seed;
   }
-};
+
+  const base = isJsonObject(seed) ? seed : {};
+
+  const allowedTokens = Array.isArray(base.allowedTokens) && base.allowedTokens.length
+    ? base.allowedTokens.join(", ")
+    : "Not set";
+  const allowedChains = Array.isArray(base.allowedChains) && base.allowedChains.length
+    ? base.allowedChains.join(", ")
+    : "Not set";
+  const allowedRecipients = Array.isArray(base.allowedRecipients) && base.allowedRecipients.length
+    ? base.allowedRecipients.join(", ")
+    : "Not set";
+  const allowedHours = Array.isArray(base.allowedHours) && base.allowedHours.length === 2
+    ? `${base.allowedHours[0]} to ${base.allowedHours[1]} UTC`
+    : "No time restriction";
+
+  return createAgentDoc({
+    name: base.title || "Agent rules document",
+    description: base.description || "No description provided",
+    model: `ENS: ${base.ensName || "Not set"} | Creator: ${base.creatorAddress || "Not set"}`,
+    strategy:
+      `Limits: ${base.maxPerTxUsdc || "Not set"} per tx / ${base.dailyLimitUsdc || "Not set"} daily` +
+      ` | Tokens: ${allowedTokens}` +
+      ` | Chains: ${allowedChains}` +
+      ` | Recipients: ${allowedRecipients}` +
+      ` | Hours: ${allowedHours}` +
+      ` | Generated: ${new Date().toISOString()}`,
+  });
+}
 
 const DEFAULT_TOKEN_OPTIONS = ["USDC", "USDT"];
 const DEFAULT_CHAIN_OPTIONS = ["base-sepolia", "base"];
@@ -740,7 +776,8 @@ export default function AgentRegistration() {
     form.domainMode === "self-owned" &&
     !readiness.loading &&
     supportsSelfOwnedDomainAutomation === false;
-  const dbRulesDocumentUrl = agentRecordFromDb?.rulesDocumentUrl || "";
+  const localRulesDocumentUrl = rulesDocCid ? buildIpfsGatewayUrl(rulesDocCid) : "";
+  const dbRulesDocumentUrl = agentRecordFromDb?.rulesDocumentUrl || localRulesDocumentUrl;
   const renderableRulesDocumentUrl = toRenderableDocumentUrl(dbRulesDocumentUrl);
   const rulesDocViewCid = rulesDocCid || extractCidFromValue(dbRulesDocumentUrl) || "";
 
@@ -1051,9 +1088,34 @@ export default function AgentRegistration() {
 
   const submit = async () => {
     setError("");
+    setRulesDocPublishing(true);
 
     try {
-      const response = await vcr.startRegistrationJob(reviewPayload);
+      const rulesTitle = rulesDocTitle.trim() || `${ensPreview} rules document`;
+      const rulesPayload = buildDefaultRulesDocumentSnapshot(
+        isDdocContent(rulesDocContent)
+          ? rulesDocContent
+          : {
+              ...reviewPayload,
+              title: rulesTitle,
+              ensName: ensPreview,
+            },
+      );
+
+      const cid = await uploadDocumentToIPFS(rulesPayload);
+      setRulesDocCid(cid);
+
+      await createStoredDocument({
+        title: rulesTitle,
+        cid,
+      });
+
+      const response = await vcr.startRegistrationJob({
+        ...reviewPayload,
+        rulesDocumentUrl: buildIpfsGatewayUrl(cid),
+        rulesDocumentRaw: JSON.stringify(rulesPayload, null, 2),
+      });
+
       setJobId(response.jobId);
       setJob({
         status: response.status,
@@ -1455,6 +1517,16 @@ export default function AgentRegistration() {
                 : "No time restriction"}
             </strong>
           </div>
+          {rulesDocViewCid && (
+            <div className="wizard-review-item wide">
+              <span>Rules document</span>
+              <div className="wizard-actions" style={{ marginTop: 10 }}>
+                <Link to={`/doc/${rulesDocViewCid}`} className="btn btn-ghost">
+                  View dDoc
+                </Link>
+              </div>
+            </div>
+          )}
           <div className="wizard-review-item wide">
             <span>ENS profile media</span>
             <div className="wizard-profile-grid">
@@ -1792,7 +1864,11 @@ export default function AgentRegistration() {
                 </div>
                 <div className="wizard-review-item">
                   <span>Rules doc (from DB)</span>
-                  {dbRulesDocumentUrl ? (
+                  {rulesDocViewCid ? (
+                    <Link to={`/doc/${rulesDocViewCid}`} className="mono">
+                      Open rules document
+                    </Link>
+                  ) : dbRulesDocumentUrl ? (
                     <a href={renderableRulesDocumentUrl} target="_blank" rel="noreferrer" className="mono">
                       Open rules document
                     </a>
@@ -1815,6 +1891,11 @@ export default function AgentRegistration() {
                 <a href={successResult.links.ipfs} target="_blank" rel="noreferrer" className="btn btn-primary">
                   View on IPFS
                 </a>
+                {rulesDocViewCid && (
+                  <Link to={`/doc/${rulesDocViewCid}`} className="btn btn-primary">
+                    View dDoc
+                  </Link>
+                )}
                 <a href={successResult.links.registrationTx} target="_blank" rel="noreferrer" className="btn btn-ghost">
                   Registration tx
                 </a>

@@ -12,6 +12,10 @@ import {
   setEnsTextRecords,
   ERC8004_ADDRESSES,
   prepareSelfOwnedEnsTransactions,
+  getVCRPolicyContenthashUri,
+  getLegacyVCRPolicyText,
+  getEnsProfileRecords,
+  getAgentRegistrationRecord,
 } from "@vcr-protocol/sdk";
 import type {
   AgentMetadata,
@@ -844,18 +848,21 @@ router.post("/:agentId/self-owned/prepare", async (req, res) => {
       return res.status(403).json({ error: "Connected wallet is not allowed to configure this agent" });
     }
 
-    const uploaded: Record<string, string> = {};
+    const uploadedGateway: Record<string, string> = {};
+    const uploadedTextRecords: Record<string, string> = {};
     const uploadedIpfs: Record<string, string> = {};
 
     if (avatarDataUrl) {
       const avatar = await uploadProfileAsset(avatarDataUrl, `${agent.ensName}-avatar`);
-      uploaded.avatar = avatar.gatewayUrl;
+      uploadedGateway.avatar = avatar.gatewayUrl;
+      uploadedTextRecords.avatar = avatar.ipfsUri;
       uploadedIpfs.avatar = avatar.ipfsUri;
     }
 
     if (headerDataUrl) {
       const header = await uploadProfileAsset(headerDataUrl, `${agent.ensName}-header`);
-      uploaded.header = header.gatewayUrl;
+      uploadedGateway.header = header.gatewayUrl;
+      uploadedTextRecords.header = header.ipfsUri;
       uploadedIpfs.header = header.ipfsUri;
     }
 
@@ -864,7 +871,7 @@ router.post("/:agentId/self-owned/prepare", async (req, res) => {
       ownerAddress: normalizedActor,
       agentId,
       policyUriOrCid: agent.policyUri,
-      textRecords: uploaded,
+      textRecords: uploadedTextRecords,
     });
 
     return res.json({
@@ -874,10 +881,12 @@ router.post("/:agentId/self-owned/prepare", async (req, res) => {
       actorAddress: normalizedActor,
       policyUri: agent.policyUri,
       profile: {
-        avatar: uploaded.avatar,
-        header: uploaded.header,
+        avatar: uploadedGateway.avatar,
+        header: uploadedGateway.header,
         avatarIpfsUri: uploadedIpfs.avatar,
         headerIpfsUri: uploadedIpfs.header,
+        avatarTextRecord: uploadedTextRecords.avatar,
+        headerTextRecord: uploadedTextRecords.header,
       },
       ensSetup: prepared,
     });
@@ -1017,25 +1026,28 @@ router.put("/:agentId/profile", async (req, res) => {
       return res.status(403).json({ error: "Connected wallet is not allowed to update this agent profile" });
     }
 
-    const uploaded: Record<string, string> = {};
+    const uploadedGateway: Record<string, string> = {};
+    const uploadedTextRecords: Record<string, string> = {};
     const profileAssets: Record<string, string> = {};
     const uploadedIpfs: Record<string, string> = {};
 
     if (avatarDataUrl) {
       const avatar = await uploadProfileAsset(avatarDataUrl, `${agent.ensName}-avatar`);
-      uploaded.avatar = avatar.gatewayUrl;
+      uploadedGateway.avatar = avatar.gatewayUrl;
+      uploadedTextRecords.avatar = avatar.ipfsUri;
       profileAssets.avatarUri = avatar.gatewayUrl;
       uploadedIpfs.avatar = avatar.ipfsUri;
     }
 
     if (headerDataUrl) {
       const header = await uploadProfileAsset(headerDataUrl, `${agent.ensName}-header`);
-      uploaded.header = header.gatewayUrl;
+      uploadedGateway.header = header.gatewayUrl;
+      uploadedTextRecords.header = header.ipfsUri;
       profileAssets.headerUri = header.gatewayUrl;
       uploadedIpfs.header = header.ipfsUri;
     }
 
-    const ensResult = await setEnsTextRecords(agent.ensName, uploaded);
+    const ensResult = await setEnsTextRecords(agent.ensName, uploadedTextRecords);
     const updated = await updateAgentProfile(agentId, profileAssets);
 
     return res.json({
@@ -1044,14 +1056,52 @@ router.put("/:agentId/profile", async (req, res) => {
       ensName: agent.ensName,
       txHash: ensResult.txHash,
       profile: {
-        avatar: uploaded.avatar,
-        header: uploaded.header,
+        avatar: uploadedGateway.avatar,
+        header: uploadedGateway.header,
         avatarUri: profileAssets.avatarUri,
         headerUri: profileAssets.headerUri,
         avatarIpfsUri: uploadedIpfs.avatar,
         headerIpfsUri: uploadedIpfs.header,
+        avatarTextRecord: uploadedTextRecords.avatar,
+        headerTextRecord: uploadedTextRecords.header,
       },
       agent: updated ?? agent,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+router.get("/:agentId/ens-records", async (req, res) => {
+  try {
+    const agentId = parseInt(req.params.agentId, 10);
+    if (Number.isNaN(agentId)) {
+      return res.status(400).json({ error: "Invalid agentId" });
+    }
+
+    const agent = await getAgentByChainId(agentId);
+    if (!agent || !agent.ensName) {
+      return res.status(404).json({ error: "Agent not found or ENS name missing" });
+    }
+
+    const [policyContenthashUri, legacyPolicyText, profileRecords, agentRegistration] =
+      await Promise.all([
+        getVCRPolicyContenthashUri(agent.ensName),
+        getLegacyVCRPolicyText(agent.ensName),
+        getEnsProfileRecords(agent.ensName),
+        getAgentRegistrationRecord(agent.ensName, agentId),
+      ]);
+
+    return res.json({
+      agentId,
+      ensName: agent.ensName,
+      records: {
+        agentRegistration,
+        policyContenthashUri,
+        legacyPolicyText,
+        avatar: profileRecords.avatar,
+        header: profileRecords.header,
+      },
     });
   } catch (err) {
     return res.status(500).json({ error: (err as Error).message });
