@@ -14,6 +14,7 @@ import { Eth } from "@bitgo/sdk-coin-eth";
 import { keccak256, toHex } from "viem";
 import stringify from "json-stringify-deterministic";
 import { timingSafeEqual } from "crypto";
+import { inspect } from "util";
 import type { BitGoWalletResult, BitGoPolicy } from "./types.js";
 
 // ─── Client Factory ───────────────────────────────────────────────────────────
@@ -83,12 +84,17 @@ export async function createAgentWallet(
   // mix TSS key-creation paths with a non-TSS type, producing the error:
   //   "walletVersion 3 is not compatible with independent key"
   // walletVersion:3 alone is sufficient to get a standard 2-of-3 onchain wallet.
-  const result = await bitgo.coin("hteth").wallets().generateWallet({
-    label,
-    passphrase: walletPassphrase,
-    enterprise: enterpriseId,
-    walletVersion: 3,
-  } as any);
+  let result: any;
+  try {
+    result = await bitgo.coin("hteth").wallets().generateWallet({
+      label,
+      passphrase: walletPassphrase,
+      enterprise: enterpriseId,
+      walletVersion: 3,
+    } as any);
+  } catch (error) {
+    throw new Error(describeUnknownError(error, "BitGo generateWallet failed"));
+  }
 
   const wallet = result.wallet;
   const walletId = wallet.id();
@@ -155,9 +161,14 @@ export async function createAgentWallet(
   // ── Step 4: Create forwarder address ──────────────────────────────────────
   // The forwarder address is what the agent actually uses for spending.
   // It is separate from the wallet's default receive address.
-  const forwarderResult = await (liveWallet as any).createAddress({
-    walletVersion: 3,
-  });
+  let forwarderResult: any;
+  try {
+    forwarderResult = await (liveWallet as any).createAddress({
+      walletVersion: 3,
+    });
+  } catch (error) {
+    throw new Error(describeUnknownError(error, `BitGo createAddress failed for wallet ${walletId}`));
+  }
   const forwarderAddress: string =
     forwarderResult?.address ?? forwarderResult?.id ?? "";
 
@@ -393,4 +404,17 @@ export function computeBitGoPolicyHash(livePolicies: unknown): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function describeUnknownError(error: unknown, prefix: string): string {
+  if (error instanceof Error && error.message) {
+    return `${prefix}: ${error.message}`;
+  }
+
+  if (typeof error === "string" && error.trim()) {
+    return `${prefix}: ${error}`;
+  }
+
+  const inspected = inspect(error, { depth: 6, breakLength: 120 });
+  return `${prefix}: ${inspected}`;
 }
