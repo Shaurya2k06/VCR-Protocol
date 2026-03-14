@@ -32,7 +32,11 @@ import {
   setAgentWallet,
   waitForAgentRegistration,
 } from "./erc8004.js";
-import { buildPolicyGatewayUrl, setAllENSRecords } from "./ens.js";
+import {
+  buildPolicyGatewayUrl,
+  provisionAgentENSBinding,
+  resolveENSConfig,
+} from "./ens.js";
 import { ERC8004_ADDRESSES } from "./erc8004.js";
 import { buildPolicyNamespace, storePolicyDocument } from "./fileverse.js";
 import type {
@@ -158,8 +162,8 @@ export async function createAgent(
 
   const account = privateKeyToAccount(env.PRIVATE_KEY as `0x${string}`);
 
-  // Each agent gets its own ENS name — never shared between agents
-  const ensName = `${config.name}.${config.baseDomain}`;
+  const ensConfig = resolveENSConfig(config, account.address);
+  const ensName = ensConfig.ensName;
 
   // ── Step 1: BitGo wallet ──────────────────────────────────────────────────
   emitCreateAgentLog("[1/5] Creating BitGo wallet (Hoodi testnet)", options?.logger);
@@ -285,7 +289,7 @@ export async function createAgent(
   );
   const policyUri = storedPolicy.contentUri;
   const policyCid = policyUri.startsWith("ipfs://") ? policyUri.slice(7) : policyUri;
-  const policyGatewayUrl = buildPolicyGatewayUrl(policyUri);
+  const policyGatewayUrl = storedPolicy.viewerUrl ?? buildPolicyGatewayUrl(policyUri);
   logCreateAgentDetail(`Policy URI: ${policyUri}`, options?.logger);
   logCreateAgentDetail(`Gateway URL: ${policyGatewayUrl}`, options?.logger);
   logCreateAgentDetail(`Fileverse file ID: ${storedPolicy.fileId}`, options?.logger);
@@ -335,13 +339,18 @@ export async function createAgent(
     emitCreateAgentLog("[5/5] Binding ENS via ENSIP-25 + contenthash", options?.logger);
     logCreateAgentDetail(`ENS name: ${ensName}`, options?.logger);
     logCreateAgentDetail(`Policy URI for ENS: ${policyUri}`, options?.logger);
-    const ensResult = await setAllENSRecords(
+    const ensResult = await provisionAgentENSBinding(
       ensName,
       agentId,
       policyUri,
       undefined,
       undefined,
-      options?.logger,
+      {
+        mode: ensConfig.mode,
+        managerAddress: ensConfig.managerAddress,
+        ownerAddress: ensConfig.ownerAddress,
+        registrationYears: ensConfig.registrationYears,
+      },
     );
     ensTx = ensResult.txHash;
     logCreateAgentDetail(`ENS records set tx: ${ensTx}`, options?.logger);
@@ -420,6 +429,10 @@ export async function createAgent(
   // ── Persist agent record ──────────────────────────────────────────────────
   const record: AgentRecord = {
     ensName,
+    ensMode: ensConfig.mode,
+    ensManagerAddress: ensConfig.managerAddress,
+    ensOwnerAddress: ensConfig.ownerAddress,
+    ensRegistrationYears: ensConfig.registrationYears,
     walletId:       bitgoResult.walletId,
     walletAddress:  bitgoResult.forwarderAddress,
     registryWalletAddress: linkedRegistryWalletAddress,

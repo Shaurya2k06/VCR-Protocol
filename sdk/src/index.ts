@@ -42,6 +42,7 @@ export type {
   FileversePolicyResult,
   // ENS
   ENSSetResult,
+  ENSMode,
 } from "./types.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -109,11 +110,13 @@ export {
   encodeERC7930,
   buildAgentRegistrationKey,
   buildPolicyGatewayUrl,
+  resolveENSConfig,
   setVCRPolicyRecord,
   setAgentRegistrationRecord,
   setAllENSRecords,
   setEnsTextRecords,
   prepareSelfOwnedEnsTransactions,
+  provisionAgentENSBinding,
   getVCRPolicyUri,
   getVCRPolicyContenthashUri,
   getLegacyVCRPolicyText,

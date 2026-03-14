@@ -128,8 +128,16 @@ export interface SpendSummary {
 export interface CreateAgentConfig {
   /** Used to derive the ENS name: "${name}.${baseDomain}" */
   name: string;
-  /** e.g. "acmecorp.eth" — must be owned by the PRIVATE_KEY EOA */
+  /** e.g. "acmecorp.eth" for platform mode, or "eth" for direct user-owned names */
   baseDomain: string;
+  /** Platform subdomain or direct user-owned `.eth` registration */
+  ensMode?: ENSMode;
+  /** ENS manager/owner for the created name. Defaults to the signer address. */
+  ensManagerAddress?: string;
+  /** ENS registrant / resolved owner address. Defaults to first allowed recipient, then manager. */
+  ensOwnerAddress?: string;
+  /** Registration duration in years for direct user-owned `.eth` names. Default: 1 */
+  ensRegistrationYears?: number;
   /** Maximum per-transaction amount in USDC (human-readable), e.g. "500" */
   maxPerTxUsdc: string;
   /** Maximum daily cumulative amount in USDC (human-readable), e.g. "5000" */
@@ -158,6 +166,14 @@ export interface UpdateAgentPolicyConfig {
 export interface AgentRecord {
   /** "researcher-001.acmecorp.eth" */
   ensName: string;
+  /** How this ENS name is managed */
+  ensMode?: ENSMode;
+  /** Address that controls ENS resolver writes for this name */
+  ensManagerAddress?: string;
+  /** Address set as the ENS owner / resolved address for this name */
+  ensOwnerAddress?: string;
+  /** Registration duration requested for direct user-owned `.eth` names */
+  ensRegistrationYears?: number;
   /** BitGo wallet ID */
   walletId: string;
   /** BitGo forwarder address (the address the agent actually uses) */
@@ -209,6 +225,8 @@ export interface PolicyVersionRecord {
   ensTx?: string;
   createdAt: string;
 }
+
+export type ENSMode = "platform-subdomain" | "user-root";
 
 // ─── ENSIP-25 ────────────────────────────────────────────────────────────────
 
@@ -368,6 +386,7 @@ export interface FileversePolicyResult {
   metadataUri: string;
   txHash: string;
   activityUrl?: string;
+  viewerUrl?: string;
 }
 
 // ─── ENS ─────────────────────────────────────────────────────────────────────
