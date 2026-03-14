@@ -69,9 +69,25 @@ export const vcr = {
   getRegistrationJob: (jobId) =>
     api(`/api/register/jobs/${encodeURIComponent(jobId)}`),
   registerAgent: (body) => api("/api/register", { method: "POST", body }),
+  getAllAgents: () => api("/api/register/list"),
   getAgent: (agentId) => api(`/api/register/${encodeURIComponent(agentId)}`),
   getAgentsByOwner: (address) =>
     api(`/api/register/owner/${encodeURIComponent(address)}`),
+  updateAgentProfile: (agentId, body) =>
+    api(`/api/register/${encodeURIComponent(agentId)}/profile`, {
+      method: "PUT",
+      body,
+    }),
+  prepareSelfOwnedEnsSetup: (agentId, body) =>
+    api(`/api/register/${encodeURIComponent(agentId)}/self-owned/prepare`, {
+      method: "POST",
+      body,
+    }),
+  completeSelfOwnedEnsSetup: (agentId, body) =>
+    api(`/api/register/${encodeURIComponent(agentId)}/self-owned/complete`, {
+      method: "POST",
+      body,
+    }),
 
   // Wallet
   createWallet: (body) => api("/api/wallet", { method: "POST", body }),
@@ -99,6 +115,11 @@ export const vcr = {
 
   // Demo / paywall
   simulate: (body) => api("/api/demo/simulate", { method: "POST", body }),
+  runProtocolSuite: (ensName, body = {}) =>
+    api(`/api/demo/suite/${encodeURIComponent(ensName)}`, {
+      method: "POST",
+      body,
+    }),
   getDemoDaily: (ensName, token) =>
     api(
       `/api/demo/daily/${encodeURIComponent(ensName)}/${encodeURIComponent(token)}`,

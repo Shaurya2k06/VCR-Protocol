@@ -144,6 +144,7 @@ export async function createAgent(
   },
   options?: {
     logger?: (message: string) => void;
+    skipEnsBinding?: boolean;
   },
 ): Promise<AgentRecord> {
   // Inject env vars so downstream helpers (bitgo.ts, erc8004.ts, ens.ts)
@@ -288,13 +289,7 @@ export async function createAgent(
   );
   const policyUri = storedPolicy.contentUri;
   const policyCid = policyUri.startsWith("ipfs://") ? policyUri.slice(7) : policyUri;
-<<<<<<< HEAD
   const policyGatewayUrl = storedPolicy.viewerUrl ?? buildPolicyGatewayUrl(policyUri);
-  console.log(`   ✅  Policy URI: ${policyUri}`);
-  console.log(`   ✅  Gateway URL: ${policyGatewayUrl}`);
-  console.log(`   ✅  Fileverse file ID: ${storedPolicy.fileId}`);
-=======
-  const policyGatewayUrl = buildPolicyGatewayUrl(policyUri);
   logCreateAgentDetail(`Policy URI: ${policyUri}`, options?.logger);
   logCreateAgentDetail(`Gateway URL: ${policyGatewayUrl}`, options?.logger);
   logCreateAgentDetail(`Fileverse file ID: ${storedPolicy.fileId}`, options?.logger);
@@ -331,19 +326,35 @@ export async function createAgent(
   logCreateAgentDetail(`ERC-8004 setAgentURI tx: ${agentUriTx}`, options?.logger);
 
   // ── Step 5: Bind ENS via ENSIP-25 + contenthash ──────────────────────────
-  emitCreateAgentLog("[5/5] Binding ENS via ENSIP-25 + contenthash", options?.logger);
-  logCreateAgentDetail(`ENS name: ${ensName}`, options?.logger);
-  logCreateAgentDetail(`Policy URI for ENS: ${policyUri}`, options?.logger);
-  const { txHash: ensTx } = await setAllENSRecords(
->>>>>>> 155e632a97ddf3642d2eb9aba923fd4fcde1ebab
-    ensName,
-    agentId,
-    policyUri,
-    undefined,
-    undefined,
-    options?.logger,
-  );
-  logCreateAgentDetail(`ENS records set tx: ${ensTx}`, options?.logger);
+  let ensTx = "";
+  if (options?.skipEnsBinding) {
+    emitCreateAgentLog("[5/5] Deferring ENS binding to the connected wallet", options?.logger);
+    logCreateAgentDetail(`ENS name: ${ensName}`, options?.logger);
+    logCreateAgentDetail(`Policy URI for ENS: ${policyUri}`, options?.logger);
+    logCreateAgentDetail(
+      "Skipping backend ENS write so the frontend wallet can submit the self-owned ENS transactions.",
+      options?.logger,
+    );
+  } else {
+    emitCreateAgentLog("[5/5] Binding ENS via ENSIP-25 + contenthash", options?.logger);
+    logCreateAgentDetail(`ENS name: ${ensName}`, options?.logger);
+    logCreateAgentDetail(`Policy URI for ENS: ${policyUri}`, options?.logger);
+    const ensResult = await provisionAgentENSBinding(
+      ensName,
+      agentId,
+      policyUri,
+      undefined,
+      undefined,
+      {
+        mode: ensConfig.mode,
+        managerAddress: ensConfig.managerAddress,
+        ownerAddress: ensConfig.ownerAddress,
+        registrationYears: ensConfig.registrationYears,
+      },
+    );
+    ensTx = ensResult.txHash;
+    logCreateAgentDetail(`ENS records set tx: ${ensTx}`, options?.logger);
+  }
 
   // ── Bonus: Link BitGo wallet to ERC-8004 agent ────────────────────────────
   // On BitGo TSS wallets, signTypedData may recover to baseAddress rather than

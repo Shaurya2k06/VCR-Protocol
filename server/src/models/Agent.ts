@@ -18,6 +18,10 @@ export interface IAgent extends Document {
     agentWalletAddress?: string;
     /** ENS name linked to this agent */
     ensName?: string;
+    /** ENS profile avatar URI */
+    avatarUri?: string;
+    /** ENS profile header URI */
+    headerUri?: string;
     /** IPFS URI of the Agent Metadata JSON (ERC-8004 agentURI) */
     agentUri: string;
     /** IPFS URI of the VCR Policy JSON */
@@ -56,6 +60,8 @@ const AgentSchema = new Schema<IAgent>(
         registrationMode: { type: String, enum: ["managed", "self-owned"] },
         agentWalletAddress: { type: String, lowercase: true },
         ensName: { type: String, lowercase: true, sparse: true },
+        avatarUri: { type: String },
+        headerUri: { type: String },
         agentUri: { type: String, required: true },
         policyUri: { type: String },
         rulesDocumentUrl: { type: String },
@@ -100,6 +106,31 @@ export async function getAgentsByOwner(ownerAddress: string): Promise<IAgent[]> 
     return Agent.find({
         $or: [{ ownerAddress: normalized }, { creatorAddress: normalized }],
     });
+}
+
+export async function getAllAgents(limit = 100): Promise<IAgent[]> {
+    return Agent.find({})
+        .sort({ createdAt: -1 })
+        .limit(limit);
+}
+
+export async function updateAgentProfile(
+    agentId: number,
+    profile: { avatarUri?: string; headerUri?: string }
+): Promise<IAgent | null> {
+    const updates: Record<string, string> = {};
+    if (profile.avatarUri) {
+        updates.avatarUri = profile.avatarUri;
+    }
+    if (profile.headerUri) {
+        updates.headerUri = profile.headerUri;
+    }
+
+    return Agent.findOneAndUpdate(
+        { agentId },
+        { $set: updates },
+        { new: true }
+    );
 }
 
 export async function updateAgentPolicy(

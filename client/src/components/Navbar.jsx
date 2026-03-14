@@ -1,14 +1,9 @@
 import { NavLink } from "react-router-dom";
-import { useState } from "react";
 
 export default function Navbar() {
-  const [open, setOpen] = useState(false);
-
   const links = [
     { to: "/", label: "Home", exact: true },
-    { to: "/build", label: "Builder" },
     { to: "/register", label: "Register" },
-    { to: "/verify", label: "Verifier" },
     { to: "/demo", label: "Paywall" },
     { to: "/explorer", label: "Explorer" },
     { to: "/doc/create", label: "Docs" }

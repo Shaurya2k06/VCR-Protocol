@@ -5,6 +5,13 @@ import { vcr } from "../../lib/api";
 import { createStoredDocument } from "../../utils/api";
 import { buildIpfsGatewayUrl, extractCidFromValue, uploadDocumentToIPFS } from "../../utils/ipfs";
 
+
+function buildDefaultRulesDocumentSnapshot() {
+  return {
+    rules: []
+  }
+};
+
 const DEFAULT_TOKEN_OPTIONS = ["USDC", "USDT"];
 const DEFAULT_CHAIN_OPTIONS = ["base-sepolia", "base"];
 const DEFAULT_DOMAIN_OPTIONS = ["vcrtcorp.eth"];
@@ -43,6 +50,18 @@ const JOB_STEP_LABELS = {
   ens: "Bind ENS records",
   finalize: "Finalize and persist agent",
 };
+const SEPOLIA_HEX_CHAIN_ID = "0xaa36a7";
+const SEPOLIA_NETWORK_PARAMS = {
+  chainId: SEPOLIA_HEX_CHAIN_ID,
+  chainName: "Sepolia",
+  nativeCurrency: {
+    name: "Sepolia Ether",
+    symbol: "ETH",
+    decimals: 18,
+  },
+  rpcUrls: ["https://rpc.sepolia.org"],
+  blockExplorerUrls: ["https://sepolia.etherscan.io"],
+};
 
 function sanitizeHandle(value) {
   return value
@@ -57,6 +76,20 @@ function splitEntries(value) {
     .split(/[\n,\s]+/)
     .map((entry) => entry.trim())
     .filter(Boolean);
+}
+
+function toRenderableDocumentUrl(value) {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  if (!normalized) {
+    return "";
+  }
+
+  const cid = extractCidFromValue(normalized);
+  if (!cid) {
+    return normalized;
+  }
+
+  return buildIpfsGatewayUrl(cid);
 }
 
 function formatMoney(value) {
@@ -94,86 +127,31 @@ function shortenAddress(value) {
   return `${value.slice(0, 6)}...${value.slice(-4)}`;
 }
 
-function toRenderableDocumentUrl(value) {
-  if (!value) {
-    return "";
-  }
-
-  if (value.startsWith("ipfs://")) {
-    return `https://ipfs.io/ipfs/${value.slice(7)}`;
-  }
-
-  return value;
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error(`Failed to read ${file.name}`));
+    reader.readAsDataURL(file);
+  });
 }
 
-function formatHoursWindow(allowedHours) {
-  if (!Array.isArray(allowedHours) || allowedHours.length < 2) {
-    return "No time restrictions";
-  }
-
-  return `${allowedHours[0]}:00 to ${allowedHours[1]}:00 UTC`;
+function buildProfileUpdateMessage(agentId, ensName, issuedAt) {
+  return [
+    "VCR ENS profile update",
+    `Agent ID: ${agentId}`,
+    `ENS: ${ensName}`,
+    `Issued At: ${issuedAt}`,
+  ].join("\n");
 }
 
-function buildDefaultRulesDocumentSnapshot(payload) {
-  const recipients = payload.allowedRecipients.length
-    ? payload.allowedRecipients
-    : ["None specified"];
-  const tokens = payload.allowedTokens.length
-    ? payload.allowedTokens
-    : ["None specified"];
-  const chains = payload.allowedChains.length
-    ? payload.allowedChains
-    : ["None specified"];
-
-  return {
-    type: "doc",
-    content: [
-      {
-        type: "paragraph",
-        content: [{ type: "text", text: payload.title }],
-      },
-      {
-        type: "paragraph",
-        content: [{ type: "text", text: `ENS: ${payload.ensName}` }],
-      },
-      {
-        type: "paragraph",
-        content: [{ type: "text", text: `Creator: ${payload.creatorAddress || "Not connected"}` }],
-      },
-      {
-        type: "paragraph",
-        content: [{ type: "text", text: `Description: ${payload.description || "Not set"}` }],
-      },
-      {
-        type: "paragraph",
-        content: [{ type: "text", text: `Max per payment (USDC): ${payload.maxPerTxUsdc}` }],
-      },
-      {
-        type: "paragraph",
-        content: [{ type: "text", text: `Daily limit (USDC): ${payload.dailyLimitUsdc}` }],
-      },
-      {
-        type: "paragraph",
-        content: [{ type: "text", text: `Allowed time window: ${formatHoursWindow(payload.allowedHours)}` }],
-      },
-      {
-        type: "paragraph",
-        content: [{ type: "text", text: `Allowed tokens: ${tokens.join(", ")}` }],
-      },
-      {
-        type: "paragraph",
-        content: [{ type: "text", text: `Allowed chains: ${chains.join(", ")}` }],
-      },
-      {
-        type: "paragraph",
-        content: [{ type: "text", text: "Allowed recipients:" }],
-      },
-      ...recipients.map((recipient) => ({
-        type: "paragraph",
-        content: [{ type: "text", text: `• ${recipient}` }],
-      })),
-    ],
-  };
+function buildSelfOwnedEnsSetupMessage(agentId, ensName, issuedAt) {
+  return [
+    "VCR self-owned ENS setup",
+    `Agent ID: ${agentId}`,
+    `ENS: ${ensName}`,
+    `Issued At: ${issuedAt}`,
+  ].join("\n");
 }
 
 function getWalletProvider() {
@@ -182,6 +160,48 @@ function getWalletProvider() {
   }
 
   return window.ethereum ?? null;
+}
+
+async function ensureSepoliaWallet(provider) {
+  const currentChainId = await provider.request({ method: "eth_chainId" });
+  if (currentChainId?.toLowerCase() === SEPOLIA_HEX_CHAIN_ID) {
+    return;
+  }
+
+  try {
+    await provider.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: SEPOLIA_HEX_CHAIN_ID }],
+    });
+  } catch (switchError) {
+    if (switchError?.code !== 4902) {
+      throw switchError;
+    }
+
+    await provider.request({
+      method: "wallet_addEthereumChain",
+      params: [SEPOLIA_NETWORK_PARAMS],
+    });
+  }
+}
+
+async function waitForWalletTransactionReceipt(provider, hash, timeoutMs = 180000) {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const receipt = await provider.request({
+      method: "eth_getTransactionReceipt",
+      params: [hash],
+    });
+
+    if (receipt) {
+      return receipt;
+    }
+
+    await new Promise((resolve) => window.setTimeout(resolve, 2000));
+  }
+
+  throw new Error(`Timed out waiting for transaction receipt: ${hash}`);
 }
 
 function DropdownMenu({
@@ -219,7 +239,7 @@ export default function AgentRegistration() {
   const [sdkReferences, setSdkReferences] = useState([]);
   const [ensAppUrl, setEnsAppUrl] = useState("https://app.ens.domains");
   const [signingAddress, setSigningAddress] = useState("");
-  const [supportsSelfOwnedDomainAutomation, setSupportsSelfOwnedDomainAutomation] = useState(false);
+  const [supportsSelfOwnedDomainAutomation, setSupportsSelfOwnedDomainAutomation] = useState(null);
   const [readiness, setReadiness] = useState({
     loading: true,
     ready: false,
@@ -259,6 +279,35 @@ export default function AgentRegistration() {
   const [rulesDocCid, setRulesDocCid] = useState("");
   const [rulesDocPublishing, setRulesDocPublishing] = useState(false);
   const [openDropdown, setOpenDropdown] = useState("");
+  const [avatarFile, setAvatarFile] = useState(null);
+  const [headerFile, setHeaderFile] = useState(null);
+  const [avatarPreview, setAvatarPreview] = useState("");
+  const [headerPreview, setHeaderPreview] = useState("");
+  const [profileUpload, setProfileUpload] = useState({
+    status: "idle",
+    error: "",
+    result: null,
+  });
+  const [selfOwnedEnsFlow, setSelfOwnedEnsFlow] = useState({
+    status: "idle",
+    error: "",
+    logs: [],
+    result: null,
+  });
+
+  const appendSelfOwnedEnsLog = (message) => {
+    setSelfOwnedEnsFlow((current) => ({
+      ...current,
+      logs: [
+        ...current.logs,
+        {
+          id: `${Date.now()}-${current.logs.length}`,
+          message,
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    }));
+  };
 
   useEffect(() => {
     let active = true;
@@ -283,7 +332,9 @@ export default function AgentRegistration() {
         setSdkReferences(response.sdkReferences ?? []);
         setEnsAppUrl(response.ensAppUrl ?? "https://app.ens.domains");
         setSigningAddress(response.signingAddress ?? "");
-        setSupportsSelfOwnedDomainAutomation(Boolean(response.supportsSelfOwnedDomainAutomation));
+        setSupportsSelfOwnedDomainAutomation(
+          response.supportsSelfOwnedDomainAutomation !== false,
+        );
         setForm((current) => ({
           ...current,
           selectedDomain: response.suggestedDomains?.[0] ?? current.selectedDomain,
@@ -404,36 +455,267 @@ export default function AgentRegistration() {
   }, [jobId, successResult]);
 
   useEffect(() => {
-    if (!successResult?.record?.agentId) {
-      setAgentRecordFromDb(null);
+    if (
+      !successResult?.record?.agentId ||
+      (!avatarPreview && !headerPreview) ||
+      successResult?.ownership?.domainMode === "self-owned"
+    ) {
       return undefined;
     }
 
-    let active = true;
+    let cancelled = false;
 
-    async function loadAgentFromDb() {
+    async function uploadProfileMedia() {
       try {
-        const response = await vcr.getAgent(successResult.record.agentId);
-        if (!active) {
+        const provider = getWalletProvider();
+        if (!provider || !wallet.address) {
+          throw new Error("Reconnect the creator wallet to publish ENS avatar and header records.");
+        }
+
+        setProfileUpload({
+          status: "uploading",
+          error: "",
+          result: null,
+        });
+
+        const issuedAt = new Date().toISOString();
+        const message = buildProfileUpdateMessage(
+          successResult.record.agentId,
+          successResult.record.ensName,
+          issuedAt,
+        );
+        const signature = await provider.request({
+          method: "personal_sign",
+          params: [message, wallet.address],
+        });
+
+        const result = await vcr.updateAgentProfile(successResult.record.agentId, {
+          avatarDataUrl: avatarPreview || undefined,
+          headerDataUrl: headerPreview || undefined,
+          actorAddress: wallet.address,
+          issuedAt,
+          signature,
+        });
+
+        if (cancelled) {
           return;
         }
 
-        setAgentRecordFromDb(response.localRecord ?? null);
-      } catch {
-        if (!active) {
+        setProfileUpload({
+          status: "success",
+          error: "",
+          result,
+        });
+      } catch (profileError) {
+        if (cancelled) {
           return;
         }
 
-        setAgentRecordFromDb(null);
+        setProfileUpload({
+          status: "error",
+          error: profileError.message,
+          result: null,
+        });
       }
     }
 
-    loadAgentFromDb();
+    uploadProfileMedia();
 
     return () => {
-      active = false;
+      cancelled = true;
     };
-  }, [successResult]);
+  }, [successResult, avatarPreview, headerPreview, wallet.address]);
+
+  useEffect(() => {
+    if (
+      !successResult?.record?.agentId ||
+      successResult?.ownership?.domainMode !== "self-owned" ||
+      selfOwnedEnsFlow.status !== "idle"
+    ) {
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    async function automateSelfOwnedEnsSetup() {
+      try {
+        const provider = getWalletProvider();
+        if (!provider || !wallet.address) {
+          throw new Error("Reconnect the creator wallet to finish the self-owned ENS setup.");
+        }
+
+        setSelfOwnedEnsFlow({
+          status: "preparing",
+          error: "",
+          logs: [],
+          result: null,
+        });
+
+        appendSelfOwnedEnsLog("Preparing self-owned ENS setup.");
+        appendSelfOwnedEnsLog("Checking that the connected wallet is on Sepolia.");
+        await ensureSepoliaWallet(provider);
+
+        const issuedAt = new Date().toISOString();
+        const message = buildSelfOwnedEnsSetupMessage(
+          successResult.record.agentId,
+          successResult.record.ensName,
+          issuedAt,
+        );
+
+        appendSelfOwnedEnsLog("Requesting a wallet signature for the self-owned ENS setup.");
+        const signature = await provider.request({
+          method: "personal_sign",
+          params: [message, wallet.address],
+        });
+
+        if (avatarPreview || headerPreview) {
+          setProfileUpload({
+            status: "uploading",
+            error: "",
+            result: null,
+          });
+          appendSelfOwnedEnsLog("Uploading optional ENS avatar and header assets.");
+        }
+
+        const prepared = await vcr.prepareSelfOwnedEnsSetup(successResult.record.agentId, {
+          actorAddress: wallet.address,
+          signature,
+          issuedAt,
+          avatarDataUrl: avatarPreview || undefined,
+          headerDataUrl: headerPreview || undefined,
+        });
+
+        if (cancelled) {
+          return;
+        }
+
+        const preparedTransactions = prepared.ensSetup?.transactions ?? [];
+        appendSelfOwnedEnsLog(
+          `Prepared ${preparedTransactions.length} wallet transaction${preparedTransactions.length === 1 ? "" : "s"} for ${prepared.ensName}.`,
+        );
+
+        setSelfOwnedEnsFlow((current) => ({
+          ...current,
+          status: "awaiting-wallet",
+          result: prepared,
+        }));
+
+        const submittedHashes = [];
+        for (const tx of preparedTransactions) {
+          appendSelfOwnedEnsLog(`Wallet confirmation required: ${tx.label}`);
+          const hash = await provider.request({
+            method: "eth_sendTransaction",
+            params: [
+              {
+                from: wallet.address,
+                to: tx.to,
+                data: tx.data,
+                value: tx.value ?? "0x0",
+              },
+            ],
+          });
+          submittedHashes.push(hash);
+          appendSelfOwnedEnsLog(`Submitted ${tx.label}: ${hash}`);
+          setSelfOwnedEnsFlow((current) => ({
+            ...current,
+            status: "confirming",
+          }));
+          await waitForWalletTransactionReceipt(provider, hash);
+          appendSelfOwnedEnsLog(`Confirmed ${tx.label}.`);
+        }
+
+        const ensTxHash = submittedHashes[submittedHashes.length - 1];
+        if (!ensTxHash) {
+          throw new Error("No ENS transaction hash was returned by the connected wallet.");
+        }
+
+        appendSelfOwnedEnsLog("Finalizing the self-owned ENS setup with the backend.");
+        const completion = await vcr.completeSelfOwnedEnsSetup(successResult.record.agentId, {
+          actorAddress: wallet.address,
+          signature,
+          issuedAt,
+          ensTxHash,
+          avatarUri: prepared.profile?.avatar,
+          headerUri: prepared.profile?.header,
+        });
+
+        if (cancelled) {
+          return;
+        }
+
+        setSelfOwnedEnsFlow((current) => ({
+          ...current,
+          status: "success",
+          error: "",
+          result: {
+            ...prepared,
+            completion,
+          },
+        }));
+        appendSelfOwnedEnsLog("Self-owned ENS setup finished successfully.");
+
+        setSuccessResult((current) => {
+          if (!current) {
+            return current;
+          }
+
+          return {
+            ...current,
+            links: {
+              ...current.links,
+              ensTx: completion.ensTxUrl,
+            },
+          };
+        });
+
+        if (prepared.profile?.avatar || prepared.profile?.header) {
+          setProfileUpload({
+            status: "success",
+            error: "",
+            result: {
+              profile: {
+                avatar: prepared.profile?.avatar,
+                header: prepared.profile?.header,
+                avatarIpfsUri: prepared.profile?.avatarIpfsUri,
+                headerIpfsUri: prepared.profile?.headerIpfsUri,
+              },
+            },
+          });
+        }
+      } catch (selfOwnedError) {
+        if (cancelled) {
+          return;
+        }
+
+        setSelfOwnedEnsFlow((current) => ({
+          ...current,
+          status: "error",
+          error: selfOwnedError.message,
+        }));
+        appendSelfOwnedEnsLog(`Self-owned ENS setup failed: ${selfOwnedError.message}`);
+
+        if (avatarPreview || headerPreview) {
+          setProfileUpload({
+            status: "error",
+            error: selfOwnedError.message,
+            result: null,
+          });
+        }
+      }
+    }
+
+    automateSelfOwnedEnsSetup();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    successResult,
+    selfOwnedEnsFlow.status,
+    wallet.address,
+    avatarPreview,
+    headerPreview,
+  ]);
 
   const effectiveDomain =
     form.domainMode === "managed"
@@ -454,7 +736,10 @@ export default function AgentRegistration() {
       Number(form.endHour) > Number(form.startHour) &&
       Number(form.endHour) <= 24);
 
-  const selfOwnedUnavailable = form.domainMode === "self-owned" && !supportsSelfOwnedDomainAutomation;
+  const selfOwnedUnavailable =
+    form.domainMode === "self-owned" &&
+    !readiness.loading &&
+    supportsSelfOwnedDomainAutomation === false;
   const dbRulesDocumentUrl = agentRecordFromDb?.rulesDocumentUrl || "";
   const renderableRulesDocumentUrl = toRenderableDocumentUrl(dbRulesDocumentUrl);
   const rulesDocViewCid = rulesDocCid || extractCidFromValue(dbRulesDocumentUrl) || "";
@@ -684,6 +969,17 @@ export default function AgentRegistration() {
     setRulesDocPublishing(false);
     setJobId("");
     setJob(null);
+    setProfileUpload({
+      status: "idle",
+      error: "",
+      result: null,
+    });
+    setSelfOwnedEnsFlow({
+      status: "idle",
+      error: "",
+      logs: [],
+      result: null,
+    });
   };
 
   const resetAll = () => {
@@ -716,57 +1012,48 @@ export default function AgentRegistration() {
     setRulesDocCid("");
     setRulesDocPublishing(false);
     setOpenDropdown("");
+    setAvatarFile(null);
+    setHeaderFile(null);
+    setAvatarPreview("");
+    setHeaderPreview("");
+    setProfileUpload({
+      status: "idle",
+      error: "",
+      result: null,
+    });
+    setSelfOwnedEnsFlow({
+      status: "idle",
+      error: "",
+      logs: [],
+      result: null,
+    });
+  };
+
+  const handleAvatarChange = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    setAvatarFile(file);
+    setAvatarPreview(await fileToDataUrl(file));
+  };
+
+  const handleHeaderChange = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    setHeaderFile(file);
+    setHeaderPreview(await fileToDataUrl(file));
   };
 
   const submit = async () => {
     setError("");
 
-    if (selfOwnedUnavailable) {
-      setError("Self-owned ENS domains currently need to be completed from ENS App with your connected wallet.");
-      return;
-    }
-
     try {
-      setRulesDocPublishing(true);
-
-      const normalizedRulesDocTitle = rulesDocTitle.trim() || `${ensPreview} rules document`;
-      const normalizedRulesDocContent =
-        rulesDocContent ??
-        buildDefaultRulesDocumentSnapshot({
-          title: normalizedRulesDocTitle,
-          ensName: ensPreview,
-          creatorAddress: wallet.address,
-          description: form.description.trim(),
-          maxPerTxUsdc: form.maxPerTxUsdc.trim(),
-          dailyLimitUsdc: form.dailyLimitUsdc.trim(),
-          allowedRecipients: form.allowedRecipients,
-          allowedTokens: form.allowedTokens,
-          allowedChains: form.allowedChains,
-          allowedHours: form.timeRestricted
-            ? [Number(form.startHour), Number(form.endHour)]
-            : undefined,
-        });
-
-      if (!normalizedRulesDocContent || typeof normalizedRulesDocContent !== "object") {
-        throw new Error("Rules document is invalid. Please edit the document and try again.");
-      }
-
-      const cid = await uploadDocumentToIPFS(normalizedRulesDocContent);
-      await createStoredDocument({
-        title: normalizedRulesDocTitle,
-        cid,
-      });
-
-      setRulesDocCid(cid);
-
-      const rulesDocumentUrl = buildIpfsGatewayUrl(cid);
-
-      const response = await vcr.startRegistrationJob({
-        ...reviewPayload,
-        rulesDocumentUrl,
-        rulesDocumentRaw: JSON.stringify(normalizedRulesDocContent),
-      });
-
+      const response = await vcr.startRegistrationJob(reviewPayload);
       setJobId(response.jobId);
       setJob({
         status: response.status,
@@ -1169,74 +1456,67 @@ export default function AgentRegistration() {
             </strong>
           </div>
           <div className="wizard-review-item wide">
-            <span>Rules document (Fileverse dDoc)</span>
-            <label className="wizard-label" style={{ marginBottom: 6 }}>Document title</label>
-            <input
-              className="wizard-input mono"
-              value={rulesDocTitle}
-              onChange={(event) => {
-                setRulesDocTitleTouched(true);
-                setRulesDocTitle(event.target.value);
-              }}
-              placeholder={`${ensPreview} rules document`}
-            />
-
-            <div
-              style={{
-                border: "3px solid var(--nb-ink)",
-                boxShadow: "4px 4px 0 var(--nb-ink)",
-                background: "#fff",
-                padding: 12,
-                marginTop: 12,
-              }}
-            >
-              <DdocEditor
-                initialContent={rulesDocContent}
-                onChange={(doc) => {
-                  if (doc && typeof doc === "object") {
-                    setRulesDocTouched(true);
-                    setRulesDocContent(doc);
-                  }
-                }}
-                documentStyling={{
-                  canvasBackground: "#ffffff",
-                  textColor: "#000000",
-                  fontFamily: "Inter, sans-serif",
-                }}
-                editorCanvasClassNames="max-w-3xl mx-auto"
-              />
+            <span>ENS profile media</span>
+            <div className="wizard-profile-grid">
+              <div className="wizard-profile-upload">
+                <label className="wizard-label wizard-profile-label">Avatar image</label>
+                <input type="file" accept="image/*" onChange={handleAvatarChange} />
+                <p className="wizard-help">Optional. Writes the ENS `avatar` text record after creation.</p>
+                {avatarPreview ? (
+                  <img
+                    src={avatarPreview}
+                    alt="Avatar preview"
+                    className="wizard-profile-avatar"
+                  />
+                ) : (
+                  <div className="wizard-profile-empty">No avatar selected</div>
+                )}
+              </div>
+              <div className="wizard-profile-upload">
+                <label className="wizard-label wizard-profile-label">Header image</label>
+                <input type="file" accept="image/*" onChange={handleHeaderChange} />
+                <p className="wizard-help">Optional. Writes the ENS `header` text record after creation.</p>
+                {headerPreview ? (
+                  <div
+                    className="wizard-profile-header"
+                    style={{ backgroundImage: `url(${headerPreview})` }}
+                  />
+                ) : (
+                  <div className="wizard-profile-empty">No header selected</div>
+                )}
+              </div>
             </div>
-
-            <p className="wizard-help" style={{ marginTop: 8 }}>
-              This document will be published to IPFS via Pinata and linked to this agent record on creation.
-            </p>
           </div>
         </div>
 
-        {selfOwnedUnavailable && (
+        {form.domainMode === "self-owned" && (
           <div className="wizard-review-callout">
-            <div className="alert alert-warning">
-              Self-owned ENS is not yet automated end-to-end from this server. Use your connected wallet in ENS App to register or manage the domain and pay ENS gas there.
+            <div className={selfOwnedUnavailable ? "alert alert-warning" : "alert alert-info"}>
+              {selfOwnedUnavailable
+                ? "Self-owned ENS automation is temporarily unavailable on this backend."
+                : "After the backend creates the agent, your connected wallet will automatically create the subdomain if needed and publish the ENSIP-25, policy, avatar, and header records on Sepolia."}
             </div>
-            <div className="wizard-actions">
-              <a href={ensAppUrl} target="_blank" rel="noreferrer" className="btn btn-primary">
-                Open ENS App
-              </a>
-              <button
-                type="button"
-                className="btn btn-ghost"
-                onClick={() => {
-                  setForm((current) => ({
-                    ...current,
-                    domainMode: "managed",
-                    selectedDomain: domainOptions[0] ?? "vcrtcorp.eth",
-                  }));
-                  setCurrentStep(1);
-                }}
-              >
-                Switch to managed domain
-              </button>
-            </div>
+            {selfOwnedUnavailable && (
+              <div className="wizard-actions">
+                <a href={ensAppUrl} target="_blank" rel="noreferrer" className="btn btn-primary">
+                  Open ENS App
+                </a>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => {
+                    setForm((current) => ({
+                      ...current,
+                      domainMode: "managed",
+                      selectedDomain: domainOptions[0] ?? "vcrtcorp.eth",
+                    }));
+                    setCurrentStep(1);
+                  }}
+                >
+                  Switch to managed domain
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -1381,16 +1661,12 @@ export default function AgentRegistration() {
                   >
                     Continue
                   </button>
-                ) : selfOwnedUnavailable ? (
-                  <a href={ensAppUrl} target="_blank" rel="noreferrer" className="btn btn-primary">
-                    Open ENS App
-                  </a>
                 ) : (
                   <button
                     type="button"
                     className="btn btn-primary"
                     onClick={submit}
-                    disabled={!isStepValid() || !readiness.ready || rulesDocPublishing}
+                    disabled={!isStepValid() || !readiness.ready || selfOwnedUnavailable}
                   >
                     {rulesDocPublishing ? "Publishing rules document..." : "Create agent"}
                   </button>
@@ -1475,7 +1751,16 @@ export default function AgentRegistration() {
                   </span>
                   <h2>{successResult.record.ensName}</h2>
                 </div>
-                <button type="button" className="btn btn-ghost" onClick={resetAll}>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={resetAll}
+                  disabled={
+                    successResult.ownership?.domainMode === "self-owned" &&
+                    selfOwnedEnsFlow.status !== "success" &&
+                    selfOwnedEnsFlow.status !== "error"
+                  }
+                >
                   Close
                 </button>
               </div>
@@ -1508,7 +1793,7 @@ export default function AgentRegistration() {
                 <div className="wizard-review-item">
                   <span>Rules doc (from DB)</span>
                   {dbRulesDocumentUrl ? (
-                    <a href={dbRulesDocumentUrl} target="_blank" rel="noreferrer" className="mono">
+                    <a href={renderableRulesDocumentUrl} target="_blank" rel="noreferrer" className="mono">
                       Open rules document
                     </a>
                   ) : (
@@ -1533,22 +1818,59 @@ export default function AgentRegistration() {
                 <a href={successResult.links.registrationTx} target="_blank" rel="noreferrer" className="btn btn-ghost">
                   Registration tx
                 </a>
-                <a href={successResult.links.ensTx} target="_blank" rel="noreferrer" className="btn btn-ghost">
-                  ENS tx
-                </a>
-                {renderableRulesDocumentUrl && (
-                  <a href={renderableRulesDocumentUrl} target="_blank" rel="noreferrer" className="btn btn-primary">
-                    Open rules doc
+                {successResult.links.ensTx && (
+                  <a href={successResult.links.ensTx} target="_blank" rel="noreferrer" className="btn btn-ghost">
+                    ENS tx
                   </a>
-                )}
-                {rulesDocViewCid && (
-                  <Link to={`/doc/${rulesDocViewCid}`} className="btn btn-primary">
-                    Open Fileverse viewer
-                  </Link>
                 )}
               </div>
 
               <div className="wizard-review-grid">
+                {successResult.ownership?.domainMode === "self-owned" && (
+                  <div className="wizard-review-item wide">
+                    <span>Self-owned ENS setup</span>
+                    <div className="wizard-review-tags">
+                      <code className="wizard-review-tag">
+                        {selfOwnedEnsFlow.status === "success"
+                          ? "Completed from connected wallet"
+                          : selfOwnedEnsFlow.status === "error"
+                            ? "Needs retry"
+                            : "Running in connected wallet"}
+                      </code>
+                      {selfOwnedEnsFlow.error && (
+                        <code className="wizard-review-tag">{selfOwnedEnsFlow.error}</code>
+                      )}
+                    </div>
+                    <div className="wizard-log-stream" style={{ marginTop: 14, maxHeight: 220 }}>
+                      {(selfOwnedEnsFlow.logs ?? []).map((entry) => (
+                        <div key={entry.id} className="wizard-log-line">
+                          <span className="wizard-log-time">
+                            {new Date(entry.timestamp).toLocaleTimeString()}
+                          </span>
+                          <code>{entry.message}</code>
+                        </div>
+                      ))}
+                    </div>
+                    {selfOwnedEnsFlow.status === "error" && (
+                      <div className="wizard-actions" style={{ marginTop: 14 }}>
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          onClick={() => {
+                            setSelfOwnedEnsFlow({
+                              status: "idle",
+                              error: "",
+                              logs: [],
+                              result: null,
+                            });
+                          }}
+                        >
+                          Retry ENS setup
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div className="wizard-review-item wide">
                   <span>Permissions</span>
                   <div className="wizard-review-tags">
@@ -1583,11 +1905,50 @@ export default function AgentRegistration() {
                     </div>
                   </div>
                 )}
+                {(avatarPreview || headerPreview || profileUpload.result) && (
+                  <div className="wizard-review-item wide">
+                    <span>ENS profile media</span>
+                    <div className="wizard-review-tags">
+                      {avatarFile && <code className="wizard-review-tag">Avatar: {avatarFile.name}</code>}
+                      {headerFile && <code className="wizard-review-tag">Header: {headerFile.name}</code>}
+                      {profileUpload.status === "uploading" && (
+                        <code className="wizard-review-tag">Publishing ENS profile media...</code>
+                      )}
+                      {profileUpload.status === "success" && (
+                        <>
+                          {profileUpload.result?.profile?.avatar && (
+                            <a
+                              href={profileUpload.result.profile.avatar}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="btn btn-ghost"
+                            >
+                              View avatar
+                            </a>
+                          )}
+                          {profileUpload.result?.profile?.header && (
+                            <a
+                              href={profileUpload.result.profile.header}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="btn btn-ghost"
+                            >
+                              View header
+                            </a>
+                          )}
+                        </>
+                      )}
+                      {profileUpload.status === "error" && (
+                        <code className="wizard-review-tag">Media upload failed: {profileUpload.error}</code>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="wizard-actions">
-                <Link to="/verify" className="btn btn-ghost">
-                  Open verifier
+                <Link to="/demo" className="btn btn-ghost">
+                  Open paywall demo
                 </Link>
                 <Link to="/explorer" className="btn btn-ghost">
                   Open explorer
