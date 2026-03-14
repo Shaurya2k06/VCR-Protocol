@@ -4,8 +4,8 @@ import Landing from "./components/pages/Landing";
 import AgentRegistration from "./components/pages/AgentRegistration";
 import PaywallDemo from "./components/pages/PaywallDemo";
 import PolicyExplorer from "./components/pages/PolicyExplorer";
-import CreateDocPage from "./pages/CreateDocPage";
-import ViewDocPage from "./pages/ViewDocPage";
+import CreateAgentDoc from "./pages/CreateAgentDoc";
+import ViewAgentDoc from "./pages/ViewAgentDoc";
 
 export default function App() {
   return (
@@ -16,8 +16,9 @@ export default function App() {
         <Route path="/register" element={<AgentRegistration />} />
         <Route path="/demo" element={<PaywallDemo />} />
         <Route path="/explorer" element={<PolicyExplorer />} />
-        <Route path="/doc/create" element={<CreateDocPage />} />
-        <Route path="/doc/:cid" element={<ViewDocPage />} />
+        <Route path="/doc/create" element={<CreateAgentDoc />} />
+        <Route path="/doc/create-agent" element={<CreateAgentDoc />} />
+        <Route path="/doc/:cid" element={<ViewAgentDoc />} />
       </Routes>
     </BrowserRouter>
   );

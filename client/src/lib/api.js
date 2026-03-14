@@ -71,6 +71,8 @@ export const vcr = {
   registerAgent: (body) => api("/api/register", { method: "POST", body }),
   getAllAgents: () => api("/api/register/list"),
   getAgent: (agentId) => api(`/api/register/${encodeURIComponent(agentId)}`),
+  getAgentEnsRecords: (agentId) =>
+    api(`/api/register/${encodeURIComponent(agentId)}/ens-records`),
   getAgentsByOwner: (address) =>
     api(`/api/register/owner/${encodeURIComponent(address)}`),
   updateAgentProfile: (agentId, body) =>

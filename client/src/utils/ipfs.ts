@@ -1,8 +1,44 @@
 import { API_BASE } from "./api";
+import type { FileverseDocJSON } from "../types/doc";
+
+type JsonObject = Record<string, unknown>;
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 function getConfiguredGatewayBase(): string {
   const configured = import.meta.env.VITE_IPFS_GATEWAY || "https://ipfs.io/ipfs";
   return configured.replace(/\/+$/, "");
+}
+
+function getFallbackGatewayUrls(cid: string): string[] {
+  return Array.from(
+    new Set([
+      buildIpfsGatewayUrl(cid),
+      `https://dweb.link/ipfs/${cid}`,
+      `https://gateway.pinata.cloud/ipfs/${cid}`,
+      `https://ipfs.io/ipfs/${cid}`,
+    ]),
+  );
+}
+
+async function fetchGatewayJson(url: string): Promise<JsonObject> {
+  const response = await fetch(url, {
+    method: "GET",
+    headers: { Accept: "application/json" },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Gateway returned ${response.status}`);
+  }
+
+  const payload = await response.json().catch(() => null);
+  if (!isJsonObject(payload)) {
+    throw new Error("Gateway response was not a JSON object");
+  }
+
+  return payload;
 }
 
 export function buildIpfsGatewayUrl(cid: string): string {
@@ -40,6 +76,10 @@ export function extractCidFromValue(value: string): string | null {
 }
 
 export async function uploadDocumentToIPFS(content: unknown): Promise<string> {
+  if (!isJsonObject(content)) {
+    throw new Error("Document content must be a JSON object");
+  }
+
   const res = await fetch(`${API_BASE}/api/ipfs/upload`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -55,13 +95,45 @@ export async function uploadDocumentToIPFS(content: unknown): Promise<string> {
   return data.cid as string;
 }
 
-export async function fetchDocumentFromIPFS(cid: string): Promise<unknown> {
-  const url = buildIpfsGatewayUrl(cid);
-  const res = await fetch(url);
+export async function uploadDocToIPFS(doc: FileverseDocJSON): Promise<string> {
+  return uploadDocumentToIPFS(doc);
+}
 
-  if (!res.ok) {
-    throw new Error(`Failed to load IPFS document (${res.status})`);
+export async function fetchDocumentFromIPFS(cid: string): Promise<unknown> {
+  const normalizedCid = cid.trim();
+  if (!normalizedCid) {
+    throw new Error("CID is required");
   }
 
-  return res.json();
+  try {
+    const apiResponse = await fetch(
+      `${API_BASE}/api/ipfs/${encodeURIComponent(normalizedCid)}`,
+      {
+        method: "GET",
+        headers: { Accept: "application/json" },
+      },
+    );
+
+    const apiPayload = await apiResponse.json().catch(() => null);
+    if (apiResponse.ok && isJsonObject(apiPayload)) {
+      return apiPayload;
+    }
+  } catch {
+    // Fall back to direct gateway fetching.
+  }
+
+  const gatewayErrors: string[] = [];
+  for (const gatewayUrl of getFallbackGatewayUrls(normalizedCid)) {
+    try {
+      return await fetchGatewayJson(gatewayUrl);
+    } catch (err) {
+      gatewayErrors.push(`${gatewayUrl} -> ${(err as Error).message}`);
+    }
+  }
+
+  throw new Error(
+    gatewayErrors[0]
+      ? `Failed to load IPFS document. ${gatewayErrors[0]}`
+      : "Failed to load IPFS document",
+  );
 }

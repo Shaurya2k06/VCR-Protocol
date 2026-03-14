@@ -67,7 +67,7 @@ export default function DocEditor({
         }}
       >
         <DdocEditor
-          initialContent={content}
+          initialContent={null}
           onChange={(doc) => setContent((doc ?? null) as JSONContent)}
           documentStyling={{
             canvasBackground: "#ffffff",
