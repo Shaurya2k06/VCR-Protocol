@@ -13,6 +13,7 @@
 //   BITGO_ENTERPRISE_ID
 //   PINATA_JWT
 //   PINATA_GATEWAY
+//   PIMLICO_API_KEY
 //   PRIVATE_KEY
 //   SEPOLIA_RPC_URL
 //
@@ -118,6 +119,7 @@ function validateEnv(): {
   BITGO_ENTERPRISE_ID: string;
   PINATA_JWT: string;
   PINATA_GATEWAY: string;
+  PIMLICO_API_KEY: string;
   PRIVATE_KEY: string;
   SEPOLIA_RPC_URL: string;
 } {
@@ -126,6 +128,7 @@ function validateEnv(): {
     "BITGO_ENTERPRISE_ID",
     "PINATA_JWT",
     "PINATA_GATEWAY",
+    "PIMLICO_API_KEY",
     "PRIVATE_KEY",
     "SEPOLIA_RPC_URL",
   ] as const;
@@ -145,6 +148,7 @@ function validateEnv(): {
     BITGO_ENTERPRISE_ID: process.env.BITGO_ENTERPRISE_ID!,
     PINATA_JWT:          process.env.PINATA_JWT!,
     PINATA_GATEWAY:      process.env.PINATA_GATEWAY!,
+    PIMLICO_API_KEY:     process.env.PIMLICO_API_KEY!,
     PRIVATE_KEY:         process.env.PRIVATE_KEY!,
     SEPOLIA_RPC_URL:     process.env.SEPOLIA_RPC_URL!,
   };
@@ -307,15 +311,26 @@ async function main(): Promise<void> {
     console.log(`  Agent ID        : ${record.agentId}`);
     console.log(`  Wallet ID       : ${record.walletId}`);
     console.log(`  Forwarder addr  : ${record.walletAddress}`);
+    if (record.registryWalletAddress) {
+      console.log(`  Registry wallet : ${record.registryWalletAddress}`);
+    }
     console.log(`  Policy CID      : ${record.policyCid}`);
+    if (record.policyGatewayUrl) {
+      console.log(`  Policy URL      : ${record.policyGatewayUrl}`);
+    }
     console.log(`  Policy hash     : ${record.policyHash.slice(0, 22)}…`);
     console.log(`  Registration tx : ${record.registrationTx}`);
     console.log(`  ENS tx          : ${record.ensTx}`);
     console.log(`  Created at      : ${record.createdAt}`);
     console.log(`\n  📁  Saved to     : agents/${args.name}.json`);
-    console.log(`  🔑  Key saved to : agents/${args.name}.key  (mode 0600, git-ignored)`);
-    console.log(`\n  ⚠️  The .key file contains your BitGo user private key.`);
-    console.log(`     Back it up securely. It cannot be recovered from BitGo.`);
+    if (record.bitgoUserKeyCaptured) {
+      console.log(`  🔑  Key saved to : agents/${args.name}.key  (mode 0600, git-ignored)`);
+      console.log(`\n  ⚠️  The .key file contains your BitGo user private key.`);
+      console.log(`     Back it up securely. It cannot be recovered from BitGo.`);
+    } else {
+      console.log("  ⚠️  BitGo did not return a plaintext user key for this wallet.");
+      console.log("     No .key file was written. Treat this wallet as non-exported recovery material.");
+    }
     console.log(`\n  Next steps:`);
     console.log(`    1. Verify the agent:  npm run demo`);
     console.log(`    2. canAgentSpend("${record.ensName}", { amount, token, recipient, chain })`);

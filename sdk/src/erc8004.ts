@@ -1,9 +1,8 @@
-import { getWalletClient } from "./client.js";
+import { getEOAWalletClient } from "./client.js";
 
 // ─── ERC-8004 Agent Registration ──────────────────────────────────────────────
 import {
   createPublicClient,
-  createWalletClient,
   http,
   parseAbi,
   decodeEventLog,
@@ -77,7 +76,7 @@ export interface RegistrationResult {
 export async function registerAgent(
   agentUri: string,
 ): Promise<{ txHash: string }> {
-  const walletClient = await getWalletClient();
+  const walletClient = getEOAWalletClient();
 
   const txHash = await walletClient.writeContract({
     address: ERC8004_ADDRESSES.identityRegistry.sepolia,
@@ -186,7 +185,7 @@ export async function setAgentMetadata(
   key: string,
   value: string,
 ): Promise<string> {
-  const walletClient = await getWalletClient();
+  const walletClient = getEOAWalletClient();
 
   const txHash = await walletClient.writeContract({
     address: ERC8004_ADDRESSES.identityRegistry.sepolia,
@@ -219,11 +218,16 @@ export async function setAgentMetadata(
 export async function setAgentWallet(
   agentId: number,
   newWallet: Address,
-  newWalletSigner?: { signTypedData: (params: { typedData: { typedDataRaw: string; version: string } }) => Promise<{ signature: string }> },
+  newWalletSigner?: {
+    signTypedData: (params: {
+      typedData: { typedDataRaw: string; version: string };
+      walletPassphrase?: string;
+    }) => Promise<{ signature: string }>;
+  },
   walletPassphrase?: string,
   deadlineSeconds = 60,
 ): Promise<string> {
-  const txWalletClient = await getWalletClient();
+  const txWalletClient = getEOAWalletClient();
   const account = privateKeyToAccount(process.env.PRIVATE_KEY as `0x${string}`);
 
   // ERC-8004 enforces: deadline must be <= block.timestamp + 5 minutes
@@ -276,8 +280,8 @@ export async function setAgentWallet(
       typedData: {
         typedDataRaw,
         version: "V4",
-        ...(walletPassphrase ? { walletPassphrase } : {}),
       },
+      ...(walletPassphrase ? { walletPassphrase } : {}),
     });
 
     signature = result.signature;

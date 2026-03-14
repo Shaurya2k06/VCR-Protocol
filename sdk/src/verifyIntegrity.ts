@@ -45,7 +45,7 @@ export async function verifyPolicyIntegrity(
   if (!policy) {
     throw new Error(
       `No VCR policy found for "${ensName}". ` +
-      `Ensure the vcr.policy ENS text record is set and the IPFS document is accessible.`,
+      `Ensure ENS contenthash or the legacy vcr.policy record is set and the IPFS document is accessible.`,
     );
   }
 

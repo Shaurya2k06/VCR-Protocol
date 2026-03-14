@@ -155,10 +155,27 @@ export interface AgentRecord {
   walletId: string;
   /** BitGo forwarder address (the address the agent actually uses) */
   walletAddress: string;
+  /**
+   * Address linked on ERC-8004 via setAgentWallet (may be BitGo baseAddress
+   * for TSS wallets where forwarders cannot produce ECDSA signatures).
+   */
+  registryWalletAddress?: string;
   /** ERC-8004 agentId (starts from 0) */
   agentId: number;
   /** IPFS CID of the final VCR policy document */
   policyCid: string;
+  /** ipfs:// URI of the final VCR policy document */
+  policyUri: string;
+  /** Explorer-friendly HTTP gateway URL for the final VCR policy document */
+  policyGatewayUrl?: string;
+  /** Fileverse file identifier for the stored policy document */
+  policyFileId?: string;
+  /** Fileverse portal address that manages the policy document */
+  policyPortalAddress?: string;
+  /** Fileverse namespace used to provision agent storage */
+  policyNamespace?: string;
+  /** True if BitGo returned the one-time plaintext user key during creation */
+  bitgoUserKeyCaptured?: boolean;
   /** keccak256 of the live BitGo wallet policy at creation time */
   policyHash: string;
   /** ERC-8004 registration transaction hash */
@@ -284,6 +301,15 @@ export interface X402PaymentRequirement {
 export interface PinResult {
   cid: string;
   ipfsUri: string; // ipfs://<cid>
+}
+
+export interface FileversePolicyResult {
+  fileId: string;
+  portalAddress: string;
+  namespace: string;
+  contentUri: string;
+  metadataUri: string;
+  txHash: string;
 }
 
 // ─── ENS ─────────────────────────────────────────────────────────────────────

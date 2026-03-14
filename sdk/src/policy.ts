@@ -68,6 +68,15 @@ function getPinata(): PinataSDK {
   return new PinataSDK({ pinataJwt: jwt, pinataGateway: gateway });
 }
 
+export function extractPolicyCid(cidOrUri: string): string {
+  if (cidOrUri.startsWith("ipfs://")) return cidOrUri.slice(7);
+
+  const gatewayMatch = cidOrUri.match(/\/ipfs\/([^/?#]+)/i);
+  if (gatewayMatch?.[1]) return gatewayMatch[1];
+
+  return cidOrUri;
+}
+
 /**
  * Pin a VCR Policy JSON to IPFS via Pinata.
  * Uses json-stringify-deterministic to ensure CID reproducibility.
@@ -91,7 +100,7 @@ export async function pinPolicy(policy: VCRPolicy): Promise<PinResult> {
  * Accepts either an ipfs:// URI or a raw CID.
  */
 export async function fetchPolicy(cidOrUri: string): Promise<VCRPolicy> {
-  const cid = cidOrUri.startsWith("ipfs://") ? cidOrUri.slice(7) : cidOrUri;
+  const cid = extractPolicyCid(cidOrUri);
 
   const gateway = process.env.PINATA_GATEWAY;
   if (!gateway) throw new Error("PINATA_GATEWAY must be set");
