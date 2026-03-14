@@ -30,6 +30,10 @@ import type { CreateAgentConfig } from "../src/types.js";
 interface ParsedArgs {
   name: string;
   domain: string;
+  ensMode: "platform-subdomain" | "user-root";
+  manager?: string;
+  owner?: string;
+  years: string;
   maxTx: string;
   daily: string;
   recipients: string[];
@@ -63,10 +67,26 @@ function parseArgs(argv: string[]): ParsedArgs {
     process.env.AGENT_NAME ??
     `agent-${Date.now()}`;
 
+  const ensMode =
+    (get("--ens-mode") as ParsedArgs["ensMode"] | undefined) ??
+    ((process.env.ENS_MODE as ParsedArgs["ensMode"] | undefined) ?? "platform-subdomain");
+
   const domain =
     get("--domain") ??
-    process.env.ENS_BASE_DOMAIN ??
-    "";
+    (ensMode === "user-root" ? "eth" : (process.env.ENS_BASE_DOMAIN ?? ""));
+
+  const manager =
+    get("--manager") ??
+    process.env.ENS_MANAGER_ADDRESS;
+
+  const owner =
+    get("--owner") ??
+    process.env.ENS_OWNER_ADDRESS;
+
+  const years =
+    get("--years") ??
+    process.env.ENS_REGISTRATION_YEARS ??
+    "1";
 
   const maxTx =
     get("--max-tx") ??
@@ -109,7 +129,23 @@ function parseArgs(argv: string[]): ParsedArgs {
   const dryRun = has("--dry-run");
   const yes = has("--yes");
 
-  return { name, domain, maxTx, daily, recipients, tokens, chains, hours, description, dryRun, yes };
+  return {
+    name,
+    domain,
+    ensMode,
+    manager,
+    owner,
+    years,
+    maxTx,
+    daily,
+    recipients,
+    tokens,
+    chains,
+    hours,
+    description,
+    dryRun,
+    yes,
+  };
 }
 
 // ─── Validation ───────────────────────────────────────────────────────────────
@@ -160,14 +196,35 @@ function validateArgs(args: ParsedArgs): void {
   if (!/^[a-z0-9-]+$/.test(args.name)) {
     errors.push(`--name "${args.name}" must contain only lowercase letters, numbers, and hyphens`);
   }
-  if (!args.domain) {
+  if (!args.domain && args.ensMode === "platform-subdomain") {
     errors.push(`Missing ENS base domain. Use --domain acmecorp.eth or set ENS_BASE_DOMAIN in .env`);
   }
-  if (!args.domain.includes(".")) {
+  if (args.ensMode === "platform-subdomain" && !args.domain.includes(".")) {
     errors.push(`--domain "${args.domain}" must be a valid ENS name (e.g. acmecorp.eth)`);
   }
-  if (args.domain === "example.eth") {
+  if (args.ensMode === "platform-subdomain" && args.domain === "example.eth") {
     errors.push(`--domain "example.eth" is a placeholder and is not owned by your wallet. Use a real ENS name you own.`);
+  }
+  if (!["platform-subdomain", "user-root"].includes(args.ensMode)) {
+    errors.push(`--ens-mode must be either "platform-subdomain" or "user-root"`);
+  }
+  if (args.ensMode === "user-root") {
+    if ((args.domain || "eth") !== "eth") {
+      errors.push(`user-root ENS mode currently supports direct .eth names only. Use --domain eth or omit --domain.`);
+    }
+    if (!args.manager) {
+      errors.push(`user-root ENS mode requires --manager 0x... so the user owns/manages the new ENS name`);
+    }
+  }
+  if (args.manager && !/^0x[0-9a-fA-F]{40}$/.test(args.manager)) {
+    errors.push(`Invalid --manager address: "${args.manager}"`);
+  }
+  if (args.owner && !/^0x[0-9a-fA-F]{40}$/.test(args.owner)) {
+    errors.push(`Invalid --owner address: "${args.owner}"`);
+  }
+  const yearsNum = parseInt(args.years, 10);
+  if (isNaN(yearsNum) || yearsNum < 1) {
+    errors.push(`--years "${args.years}" must be an integer >= 1`);
   }
   const maxTxNum = parseFloat(args.maxTx);
   if (isNaN(maxTxNum) || maxTxNum <= 0) {
@@ -213,11 +270,22 @@ function validateArgs(args: ParsedArgs): void {
 // ─── Summary printer ──────────────────────────────────────────────────────────
 
 function printSummary(args: ParsedArgs, env: ReturnType<typeof validateEnv>): void {
-  const ensName = `${args.name}.${args.domain}`;
+  const ensName = args.ensMode === "user-root"
+    ? `${args.name}.${args.domain || "eth"}`
+    : `${args.name}.${args.domain}`;
   console.log("\n╔══════════════════════════════════════════════════════╗");
   console.log("║          VCR Agent Setup — Configuration             ║");
   console.log("╚══════════════════════════════════════════════════════╝\n");
   console.log(`  ENS name          : ${ensName}`);
+  console.log(`  ENS mode          : ${args.ensMode}`);
+  if (args.ensMode === "user-root") {
+    console.log(`  ENS manager       : ${args.manager}`);
+    console.log(`  ENS owner         : ${args.owner ?? args.recipients[0] ?? args.manager}`);
+    console.log(`  ENS duration      : ${args.years} year(s)`);
+  } else {
+    console.log(`  ENS manager       : signer/owner wallet`);
+    console.log(`  ENS owner         : ${args.owner ?? args.recipients[0] ?? "signer/owner wallet"}`);
+  }
   console.log(`  Max per tx        : $${args.maxTx} USDC`);
   console.log(`  Daily limit       : $${args.daily} USDC`);
   console.log(`  Allowed recipients: ${args.recipients.length} address(es)`);
@@ -291,7 +359,11 @@ async function main(): Promise<void> {
 
   const config: CreateAgentConfig = {
     name:               args.name,
-    baseDomain:         args.domain,
+    baseDomain:         args.ensMode === "user-root" ? (args.domain || "eth") : args.domain,
+    ensMode:            args.ensMode,
+    ensManagerAddress:  args.manager,
+    ensOwnerAddress:    args.owner ?? args.recipients[0],
+    ensRegistrationYears: parseInt(args.years, 10),
     maxPerTxUsdc:       args.maxTx,
     dailyLimitUsdc:     args.daily,
     allowedRecipients:  args.recipients,

@@ -2,6 +2,7 @@ import { getEOAWalletClient } from "./client.js";
 import { decode as decodeContenthash, encode as encodeContenthash } from "@ensdomains/content-hash";
 import { verifyERC8004Registration } from "./erc8004.js";
 import { extractPolicyCid } from "./policy.js";
+import crypto from "crypto";
 
 // ─── ENS Integration — ENSIP-25 + Policy contenthash ─────────────────────────
 import {
@@ -13,15 +14,24 @@ import {
   keccak256,
   concat,
   toBytes,
+  zeroHash,
+  formatEther,
 } from "viem";
 import { sepolia } from "viem/chains";
 import { normalize, namehash } from "viem/ens";
-import type { ENSSetResult, LinkVerificationResult } from "./types.js";
+import type {
+  CreateAgentConfig,
+  ENSMode,
+  ENSSetResult,
+  LinkVerificationResult,
+} from "./types.js";
 
 // ─── Contract Addresses ───────────────────────────────────────────────────────
 
 export const ENS_ADDRESSES = {
   registry: "0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e" as const,
+  baseRegistrarSepolia: "0x57f1887a8BF19b14fC0dF6Fd9B2acc9Af147eA85" as const,
+  ethRegistrarControllerSepolia: "0xfb3cE5D01e0f33f41DbB39035dB9745962F1f968" as const,
   universalResolver: "0xeEeEEEeE14D718C2B47D9923Deab1335E144EeEe" as const,
   publicResolverMainnet: "0xF29100983E058B709F3D539b0c765937B804AC15" as const,
   publicResolverSepolia: "0xE99638b40E4Fff0129D56f03b55b6bbC4BBE49b5" as const,
@@ -35,6 +45,105 @@ const ensRegistryAbi = parseAbi([
   "function owner(bytes32 node) view returns (address)",
   "function setSubnodeRecord(bytes32 node, bytes32 label, address owner, address resolver, uint64 ttl) external",
 ]);
+
+const baseRegistrarAbi = parseAbi([
+  "function ownerOf(uint256 tokenId) view returns (address)",
+  "function safeTransferFrom(address from, address to, uint256 tokenId) external",
+]);
+
+const registrarAbi = [
+  {
+    name: "available",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "label", type: "string" }],
+    outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    name: "minCommitmentAge",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    name: "commitments",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "commitment", type: "bytes32" }],
+    outputs: [{ name: "timestamp", type: "uint256" }],
+  },
+  {
+    name: "rentPrice",
+    type: "function",
+    stateMutability: "view",
+    inputs: [
+      { name: "label", type: "string" },
+      { name: "duration", type: "uint256" },
+    ],
+    outputs: [
+      {
+        name: "price",
+        type: "tuple",
+        components: [
+          { name: "base", type: "uint256" },
+          { name: "premium", type: "uint256" },
+        ],
+      },
+    ],
+  },
+  {
+    name: "makeCommitment",
+    type: "function",
+    stateMutability: "pure",
+    inputs: [
+      {
+        name: "registration",
+        type: "tuple",
+        components: [
+          { name: "label", type: "string" },
+          { name: "owner", type: "address" },
+          { name: "duration", type: "uint256" },
+          { name: "secret", type: "bytes32" },
+          { name: "resolver", type: "address" },
+          { name: "data", type: "bytes[]" },
+          { name: "reverseRecord", type: "uint8" },
+          { name: "referrer", type: "bytes32" },
+        ],
+      },
+    ],
+    outputs: [{ name: "commitment", type: "bytes32" }],
+  },
+  {
+    name: "commit",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "commitment", type: "bytes32" }],
+    outputs: [],
+  },
+  {
+    name: "register",
+    type: "function",
+    stateMutability: "payable",
+    inputs: [
+      {
+        name: "registration",
+        type: "tuple",
+        components: [
+          { name: "label", type: "string" },
+          { name: "owner", type: "address" },
+          { name: "duration", type: "uint256" },
+          { name: "secret", type: "bytes32" },
+          { name: "resolver", type: "address" },
+          { name: "data", type: "bytes[]" },
+          { name: "reverseRecord", type: "uint8" },
+          { name: "referrer", type: "bytes32" },
+        ],
+      },
+    ],
+    outputs: [],
+  },
+] as const;
 
 // ─── NameWrapper ABI (subset) ────────────────────────────────────────────────
 const nameWrapperAbi = parseAbi([
@@ -122,15 +231,96 @@ function getPublicClient() {
   return createPublicClient({ chain: sepolia, transport: http(rpcUrl) });
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizeEnsManagerAddress(address: string): `0x${string}` {
+  if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
+    throw new Error(`Invalid ENS manager address: ${address}`);
+  }
+  return address as `0x${string}`;
+}
+
+export type ResolvedENSConfig = {
+  ensName: string;
+  mode: ENSMode;
+  managerAddress: `0x${string}`;
+  ownerAddress: `0x${string}`;
+  registrationYears: number;
+};
+
+export function resolveENSConfig(
+  config: Pick<CreateAgentConfig, "name" | "baseDomain" | "ensMode" | "ensManagerAddress" | "ensOwnerAddress" | "ensRegistrationYears" | "allowedRecipients">,
+  signerAddress: string,
+): ResolvedENSConfig {
+  const mode = config.ensMode ?? "platform-subdomain";
+  const managerAddress = normalizeEnsManagerAddress(
+    config.ensManagerAddress ?? signerAddress,
+  );
+  const ownerAddress = normalizeEnsManagerAddress(
+    config.ensOwnerAddress ?? config.allowedRecipients?.[0] ?? managerAddress,
+  );
+  const registrationYears = config.ensRegistrationYears ?? 1;
+
+  if (registrationYears < 1) {
+    throw new Error("ENS registration years must be at least 1");
+  }
+
+  if (mode === "user-root") {
+    const tld = config.baseDomain || "eth";
+    if (tld !== "eth") {
+      throw new Error(
+        `user-root ENS mode currently supports direct .eth registrations only (received "${tld}")`,
+      );
+    }
+
+    return {
+      ensName: `${config.name}.eth`,
+      mode,
+      managerAddress,
+      ownerAddress,
+      registrationYears,
+    };
+  }
+
+  if (!config.baseDomain || config.baseDomain === "eth") {
+    throw new Error(
+      'platform-subdomain ENS mode requires a parent domain like "vcrtcorp.eth"',
+    );
+  }
+
+  return {
+    ensName: `${config.name}.${config.baseDomain}`,
+    mode,
+    managerAddress,
+    ownerAddress,
+    registrationYears,
+  };
+}
+
 
 // ─── Text Record ABI ──────────────────────────────────────────────────────────
 
 const resolverAbi = parseAbi([
+  "function setAddr(bytes32 node, address a) external",
   "function setText(bytes32 node, string calldata key, string calldata value) external",
   "function setContenthash(bytes32 node, bytes calldata hash) external",
   "function contenthash(bytes32 node) external view returns (bytes memory)",
   "function multicall(bytes[] calldata data) external returns (bytes[] memory)",
 ]);
+
+type EnsWriteOptions = {
+  managerAddress?: `0x${string}`;
+  ownerAddress?: `0x${string}`;
+  resolvedAddress?: `0x${string}`;
+  policyTextValue?: string;
+};
+
+type ProvisionEnsBindingOptions = EnsWriteOptions & {
+  mode?: ENSMode;
+  registrationYears?: number;
+};
 
 // ─── Write Operations ─────────────────────────────────────────────────────────
 
@@ -165,42 +355,94 @@ function decodeIpfsContenthashRecord(contenthash: string | null): string | null 
   }
 }
 
+function buildResolverWrites(
+  ensName: string,
+  agentId: number | null,
+  policyUriOrCid: string | null,
+  registryAddress: string,
+  chainId: number,
+  options: EnsWriteOptions = {},
+): `0x${string}`[] {
+  const node = namehash(normalize(ensName));
+  const calls: `0x${string}`[] = [];
+
+  const addrTarget = options.resolvedAddress ?? options.ownerAddress;
+  if (addrTarget) {
+    calls.push(
+      encodeFunctionData({
+        abi: resolverAbi,
+        functionName: "setAddr",
+        args: [node, addrTarget],
+      }),
+    );
+  }
+
+  if (agentId !== null) {
+    calls.push(
+      encodeFunctionData({
+        abi: resolverAbi,
+        functionName: "setText",
+        args: [node, buildAgentRegistrationKey(registryAddress, chainId, agentId), "1"],
+      }),
+    );
+  }
+
+  if (policyUriOrCid) {
+    const policyTextValue = options.policyTextValue ?? buildPolicyGatewayUrl(policyUriOrCid);
+    calls.push(
+      encodeFunctionData({
+        abi: resolverAbi,
+        functionName: "setContenthash",
+        args: [node, encodeIpfsContenthash(policyUriOrCid)],
+      }),
+    );
+    calls.push(
+      encodeFunctionData({
+        abi: resolverAbi,
+        functionName: "setText",
+        args: [node, "vcr.policy", policyTextValue],
+      }),
+    );
+  }
+
+  return calls;
+}
+
+async function submitResolverWrites(writes: `0x${string}`[]): Promise<`0x${string}`> {
+  const walletClient = getEOAWalletClient();
+  return walletClient.writeContract({
+    address: ENS_ADDRESSES.publicResolverSepolia,
+    abi: resolverAbi,
+    functionName: "multicall",
+    args: [writes],
+  });
+}
+
 /**
  * Set the ENS contenthash record pointing to an IPFS CID.
  */
 export async function setVCRPolicyRecord(
   ensName: string,
   policyUriOrCid: string,
+  options: EnsWriteOptions = {},
 ): Promise<ENSSetResult> {
-  const walletClient = getEOAWalletClient();
-  await ensureSubdomainExists(ensName);
-  const node = namehash(normalize(ensName));
-  const resolver = ENS_ADDRESSES.publicResolverSepolia;
-
-  const encodedLegacyText = encodeFunctionData({
-    abi: resolverAbi,
-    functionName: "setText",
-    args: [node, "vcr.policy", buildPolicyGatewayUrl(policyUriOrCid)],
-  });
-
-  const encodedContenthash = encodeFunctionData({
-    abi: resolverAbi,
-    functionName: "setContenthash",
-    args: [node, encodeIpfsContenthash(policyUriOrCid)],
-  });
-
-  const txHash = await walletClient.writeContract({
-    address: resolver,
-    abi: resolverAbi,
-    functionName: "multicall",
-    args: [[encodedContenthash, encodedLegacyText]],
-  });
+  await ensureSubdomainExists(ensName, options.managerAddress);
+  const txHash = await submitResolverWrites(
+    buildResolverWrites(
+      ensName,
+      null,
+      policyUriOrCid,
+      ERC8004_REGISTRY_SEPOLIA,
+      11155111,
+      options,
+    ),
+  );
 
   return {
     txHash,
     ensName,
     key: "contenthash+vcr.policy",
-    value: buildPolicyGatewayUrl(policyUriOrCid),
+    value: options.policyTextValue ?? buildPolicyGatewayUrl(policyUriOrCid),
   };
 }
 
@@ -213,19 +455,20 @@ export async function setAgentRegistrationRecord(
   agentId: number,
   registryAddress = ERC8004_REGISTRY_SEPOLIA,
   chainId = 11155111,
+  options: EnsWriteOptions = {},
 ): Promise<ENSSetResult> {
-  const walletClient = getEOAWalletClient();
-  await ensureSubdomainExists(ensName);
-  const node = namehash(normalize(ensName));
-  const resolver = ENS_ADDRESSES.publicResolverSepolia;
+  await ensureSubdomainExists(ensName, options.managerAddress);
   const key = buildAgentRegistrationKey(registryAddress, chainId, agentId);
-
-  const txHash = await walletClient.writeContract({
-    address: resolver,
-    abi: resolverAbi,
-    functionName: "setText",
-    args: [node, key, "1"],
-  });
+  const txHash = await submitResolverWrites(
+    buildResolverWrites(
+      ensName,
+      agentId,
+      null,
+      registryAddress,
+      chainId,
+      options,
+    ),
+  );
 
   return { txHash, ensName, key, value: "1" };
 }
@@ -240,40 +483,245 @@ export async function setAllENSRecords(
   policyUriOrCid: string,
   registryAddress = ERC8004_REGISTRY_SEPOLIA,
   chainId = 11155111,
+  options: EnsWriteOptions = {},
 ): Promise<{ txHash: string }> {
-  const walletClient = getEOAWalletClient();
-  await ensureSubdomainExists(ensName);
-  const node = namehash(normalize(ensName));
-  const resolver = ENS_ADDRESSES.publicResolverSepolia;
-  const agentKey = buildAgentRegistrationKey(registryAddress, chainId, agentId);
-
-  const encodedAgentRegistration = encodeFunctionData({
-    abi: resolverAbi,
-    functionName: "setText",
-    args: [node, agentKey, "1"],
-  });
-
-  const encodedPolicyPointer = encodeFunctionData({
-    abi: resolverAbi,
-    functionName: "setContenthash",
-    args: [node, encodeIpfsContenthash(policyUriOrCid)],
-  });
-
-  const encodedLegacyPolicyText = encodeFunctionData({
-    abi: resolverAbi,
-    functionName: "setText",
-    args: [node, "vcr.policy", buildPolicyGatewayUrl(policyUriOrCid)],
-  });
+  await ensureSubdomainExists(ensName, options.managerAddress);
 
   console.log(`\n      [ENS] Setting agent-registration + contenthash + vcr.policy via multicall...`);
-  const txHash = await walletClient.writeContract({
-    address: resolver,
-    abi: resolverAbi,
-    functionName: "multicall",
-    args: [[encodedAgentRegistration, encodedPolicyPointer, encodedLegacyPolicyText]],
-  });
+  const txHash = await submitResolverWrites(
+    buildResolverWrites(
+      ensName,
+      agentId,
+      policyUriOrCid,
+      registryAddress,
+      chainId,
+      options,
+    ),
+  );
 
   return { txHash };
+}
+
+async function waitForCommitmentMaturity(
+  commitment: `0x${string}`,
+  minAge: bigint,
+): Promise<void> {
+  const publicClient = getPublicClient();
+  const controller = ENS_ADDRESSES.ethRegistrarControllerSepolia;
+
+  for (let i = 0; i < 25; i++) {
+    const committedAt = (await publicClient.readContract({
+      address: controller,
+      abi: registrarAbi,
+      functionName: "commitments",
+      args: [commitment],
+    })) as bigint;
+
+    if (committedAt === 0n) return;
+
+    const latestBlock = await publicClient.getBlock({ blockTag: "latest" });
+    if (latestBlock.timestamp >= committedAt + minAge) return;
+    await sleep(3000);
+  }
+
+  throw new Error("ENS commitment did not mature on-chain in time; please retry in a few seconds");
+}
+
+async function registerDirectEthNameWithRecords(
+  ensName: string,
+  agentId: number,
+  policyUriOrCid: string,
+  options: Required<Pick<ProvisionEnsBindingOptions, "managerAddress" | "ownerAddress" | "registrationYears">> &
+    Pick<ProvisionEnsBindingOptions, "resolvedAddress">,
+  registryAddress = ERC8004_REGISTRY_SEPOLIA,
+  chainId = 11155111,
+): Promise<{ txHash: string }> {
+  const normalizedName = normalize(ensName);
+  const labels = normalizedName.split(".");
+  if (labels.length !== 2 || labels[1] !== "eth") {
+    throw new Error(`Direct ENS registration only supports second-level .eth names (received "${ensName}")`);
+  }
+
+  const walletClient = getEOAWalletClient();
+  const publicClient = getPublicClient();
+  const controller = ENS_ADDRESSES.ethRegistrarControllerSepolia;
+  const label = labels[0]!;
+  const node = namehash(normalizedName);
+  const existingOwner = (await publicClient.readContract({
+    address: ENS_ADDRESSES.registry,
+    abi: ensRegistryAbi,
+    functionName: "owner",
+    args: [node],
+  })) as `0x${string}`;
+
+  if (existingOwner !== "0x0000000000000000000000000000000000000000") {
+    if (existingOwner.toLowerCase() !== options.managerAddress.toLowerCase()) {
+      throw new Error(
+        `ENS name "${normalizedName}" is already registered to ${existingOwner}. ` +
+        `Choose another name or use the manager wallet to update it.`,
+      );
+    }
+
+    if (walletClient.account?.address.toLowerCase() !== options.managerAddress.toLowerCase()) {
+      throw new Error(
+        `ENS name "${normalizedName}" is already user-managed by ${options.managerAddress}. ` +
+        `Use that manager wallet (PRIVATE_KEY) or delegate Public Resolver approval before updating records.`,
+      );
+    }
+
+    return {
+      txHash: await submitResolverWrites(
+        buildResolverWrites(
+          normalizedName,
+          agentId,
+          policyUriOrCid,
+          registryAddress,
+          chainId,
+          options,
+        ),
+      ),
+    };
+  }
+
+  const duration = BigInt(options.registrationYears) * 365n * 24n * 60n * 60n;
+  const price = (await publicClient.readContract({
+    address: controller,
+    abi: registrarAbi,
+    functionName: "rentPrice",
+    args: [label, duration],
+  })) as { base: bigint; premium: bigint };
+  const totalCost = price.base + price.premium;
+  const paymentWithBuffer = (totalCost * 110n) / 100n;
+  const minAge = (await publicClient.readContract({
+    address: controller,
+    abi: registrarAbi,
+    functionName: "minCommitmentAge",
+  })) as bigint;
+
+  console.log(
+    `      [ENS] Registering direct name "${normalizedName}" for ${formatEther(totalCost)} ETH/year...`,
+  );
+
+  const secretBytes = crypto.getRandomValues(new Uint8Array(32));
+  const secret = `0x${Buffer.from(secretBytes).toString("hex")}` as `0x${string}`;
+  const registration = {
+    label,
+    owner: options.managerAddress,
+    duration,
+    secret,
+    resolver: ENS_ADDRESSES.publicResolverSepolia,
+    data: buildResolverWrites(
+      normalizedName,
+      agentId,
+      policyUriOrCid,
+      registryAddress,
+      chainId,
+      options,
+    ),
+    reverseRecord: 0 as number,
+    referrer: zeroHash,
+  } as const;
+
+  const commitment = (await publicClient.readContract({
+    address: controller,
+    abi: registrarAbi,
+    functionName: "makeCommitment",
+    args: [registration],
+  })) as `0x${string}`;
+
+  const commitHash = await walletClient.writeContract({
+    address: controller,
+    abi: registrarAbi,
+    functionName: "commit",
+    args: [commitment],
+  });
+  await publicClient.waitForTransactionReceipt({ hash: commitHash });
+
+  if (minAge > 0n) {
+    await sleep(Number(minAge) * 1000 + 15_000);
+  }
+  await waitForCommitmentMaturity(commitment, minAge);
+
+  const registerHash = await walletClient.writeContract({
+    address: controller,
+    abi: registrarAbi,
+    functionName: "register",
+    args: [registration],
+    value: paymentWithBuffer,
+  });
+  await publicClient.waitForTransactionReceipt({ hash: registerHash });
+
+  const tokenId = BigInt(labelhash(label));
+  if (options.ownerAddress.toLowerCase() !== options.managerAddress.toLowerCase()) {
+    const currentRegistrant = (await publicClient.readContract({
+      address: ENS_ADDRESSES.baseRegistrarSepolia,
+      abi: baseRegistrarAbi,
+      functionName: "ownerOf",
+      args: [tokenId],
+    })) as `0x${string}`;
+
+    if (currentRegistrant.toLowerCase() !== options.managerAddress.toLowerCase()) {
+      throw new Error(
+        `Expected direct ENS registrant to be ${options.managerAddress} before transfer, got ${currentRegistrant}`,
+      );
+    }
+
+    const transferHash = await walletClient.writeContract({
+      address: ENS_ADDRESSES.baseRegistrarSepolia,
+      abi: baseRegistrarAbi,
+      functionName: "safeTransferFrom",
+      args: [options.managerAddress, options.ownerAddress, tokenId],
+    });
+    await publicClient.waitForTransactionReceipt({ hash: transferHash });
+    console.log(
+      `      [ENS] Direct name registrant transferred to ${options.ownerAddress} while manager remains ${options.managerAddress} ✅`,
+    );
+  }
+  console.log(`      [ENS] Direct name "${normalizedName}" registered with resolver records ✅`);
+  return { txHash: registerHash };
+}
+
+export async function provisionAgentENSBinding(
+  ensName: string,
+  agentId: number,
+  policyUriOrCid: string,
+  registryAddress = ERC8004_REGISTRY_SEPOLIA,
+  chainId = 11155111,
+  options: ProvisionEnsBindingOptions = {},
+): Promise<{ txHash: string }> {
+  const mode = options.mode ?? "platform-subdomain";
+  const managerAddress = options.managerAddress ?? getEOAWalletClient().account!.address;
+  const ownerAddress = options.ownerAddress ?? managerAddress;
+  const registrationYears = options.registrationYears ?? 1;
+
+  if (mode === "user-root") {
+    return registerDirectEthNameWithRecords(
+      ensName,
+      agentId,
+      policyUriOrCid,
+      {
+        managerAddress,
+        ownerAddress,
+        registrationYears,
+        resolvedAddress: options.resolvedAddress,
+      },
+      registryAddress,
+      chainId,
+    );
+  }
+
+  return setAllENSRecords(
+    ensName,
+    agentId,
+    policyUriOrCid,
+    registryAddress,
+    chainId,
+    {
+      managerAddress,
+      ownerAddress,
+      resolvedAddress: options.resolvedAddress,
+    },
+  );
 }
 
 
@@ -294,15 +742,39 @@ function computeSubnodeHash(parentNode: `0x${string}`, sublabel: string): `0x${s
  * Handles both wrapped (NameWrapper) and unwrapped parent domains.
  * Creates the subdomain if it doesn't exist; skips if it already does.
  */
-async function ensureSubdomainExists(ensName: string): Promise<void> {
+async function ensureSubdomainExists(
+  ensName: string,
+  managerAddress?: `0x${string}`,
+): Promise<void> {
   const walletClient = getEOAWalletClient();
   const publicClient = getPublicClient();
   const signerAddress = walletClient.account!.address as `0x${string}`;
+  const desiredManager = managerAddress ?? signerAddress;
   const resolver = ENS_ADDRESSES.publicResolverSepolia;
   const registry = ENS_ADDRESSES.registry;
 
   // Split "sub.parent.eth" → sublabel="sub", parentDomain="parent.eth"
   const labels = ensName.split(".");
+  if (labels.length === 2 && labels[1] === "eth") {
+    const node = namehash(normalize(ensName)) as `0x${string}`;
+    const owner = await publicClient.readContract({
+      address: registry,
+      abi: ensRegistryAbi,
+      functionName: "owner",
+      args: [node],
+    }) as `0x${string}`;
+
+    if (owner === "0x0000000000000000000000000000000000000000") {
+      throw new Error(`ENS name "${ensName}" is not registered yet.`);
+    }
+    if (owner.toLowerCase() !== desiredManager.toLowerCase()) {
+      throw new Error(
+        `ENS manager mismatch for "${ensName}". Current manager: ${owner}, expected: ${desiredManager}.`,
+      );
+    }
+    return;
+  }
+
   if (labels.length < 3) {
     throw new Error(`ENS name "${ensName}" must have at least 3 labels (e.g. agent.acmecorp.eth)`);
   }
@@ -321,6 +793,11 @@ async function ensureSubdomainExists(ensName: string): Promise<void> {
   }) as `0x${string}`;
 
   if (subnodeOwner !== "0x0000000000000000000000000000000000000000") {
+    if (subnodeOwner.toLowerCase() !== desiredManager.toLowerCase()) {
+      throw new Error(
+        `Subdomain "${ensName}" already exists but is managed by ${subnodeOwner}, expected ${desiredManager}.`,
+      );
+    }
     console.log(`      [ENS] Subdomain "${ensName}" already exists (owner: ${subnodeOwner})`);
     return;
   }
@@ -388,14 +865,14 @@ async function ensureSubdomainExists(ensName: string): Promise<void> {
       address: NAME_WRAPPER_SEPOLIA,
       abi: nameWrapperAbi,
       functionName: "setSubnodeRecord",
-      args: [parentNode, sublabel, signerAddress, resolver, 0n, 0, expiryTimestamp],
+      args: [parentNode, sublabel, desiredManager, resolver, 0n, 0, expiryTimestamp],
     });
   } else {
     subTxHash = await walletClient.writeContract({
       address: registry,
       abi: ensRegistryAbi,
       functionName: "setSubnodeRecord",
-      args: [parentNode, labelhash(sublabel) as `0x${string}`, signerAddress, resolver, 0n],
+      args: [parentNode, labelhash(sublabel) as `0x${string}`, desiredManager, resolver, 0n],
     });
   }
 
