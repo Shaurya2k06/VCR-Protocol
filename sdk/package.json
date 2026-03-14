@@ -60,7 +60,8 @@
     "test:coverage": "vitest run --coverage",
     "demo": "tsx scripts/demo.ts",
     "setup": "tsx scripts/setup-agent.ts",
-    "register-ens": "tsx scripts/register-ens.ts"
+    "register-ens": "tsx scripts/register-ens.ts",
+    "validate": "tsx scripts/validate-e2e.ts"
   },
   "keywords": [
     "vcr",

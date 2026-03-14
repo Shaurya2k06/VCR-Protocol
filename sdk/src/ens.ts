@@ -189,14 +189,27 @@ export async function setAllENSRecords(
     args: [node, "vcr.policy", policyUri],
   });
 
-  const txHash = await walletClient.writeContract({
-    address: resolver,
-    abi: resolverAbi,
-    functionName: "multicall",
-    args: [[encoded1, encoded2]],
-  });
+  let txHash: `0x${string}` | undefined;
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      txHash = await walletClient.writeContract({
+        address: resolver,
+        abi: resolverAbi,
+        functionName: "multicall",
+        args: [[encoded1, encoded2]],
+      });
+      break;
+    } catch (err: any) {
+      if (attempt < 5 && err.message?.includes("reverted")) {
+        console.log(`\n      ⚠️  Resolver not ready yet (Tx reverted). Retrying in 15s (Attempt ${attempt}/5)…`);
+        await new Promise(r => setTimeout(r, 15000));
+      } else {
+        throw err;
+      }
+    }
+  }
 
-  return { txHash };
+  return { txHash: txHash! };
 }
 
 // ─── Read Operations ──────────────────────────────────────────────────────────

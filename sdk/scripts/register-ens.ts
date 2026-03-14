@@ -108,6 +108,13 @@ const registrarAbi = [
     outputs: [{ name: "", type: "uint256" }],
   },
   {
+    name: "commitments",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "commitment", type: "bytes32" }],
+    outputs: [{ name: "timestamp", type: "uint256" }],
+  },
+  {
     name: "rentPrice",
     type: "function",
     stateMutability: "view",
@@ -187,6 +194,7 @@ const nameWrapperAbi = parseAbi([
 
 const ensRegistryAbi = parseAbi([
   "function owner(bytes32 node) view returns (address)",
+  "function setOwner(bytes32 node, address owner) external",
   "function setSubnodeRecord(bytes32 node, bytes32 label, address owner, address resolver, uint64 ttl) external",
 ]);
 
@@ -406,10 +414,14 @@ async function main(): Promise<void> {
       `0x${Buffer.from(secretBytes).toString("hex")}` as `0x${string}`;
 
     // Build the Registration struct
-    // owner = ownerAddress (may differ from signer when --owner is used)
+    // IMPORTANT: When --owner differs from the signer, we register with owner = signer
+    // so the signer keeps temporary ownership of the parent node and can create the
+    // subdomain (setSubnodeRecord requires the caller to own the parent). After the
+    // subdomain is created, we transfer the parent to --owner via ENS Registry.setOwner().
+    const registrationOwner = delegatedOwner ? account.address : ownerAddress;
     const registration = {
       label: chosenName,
-      owner: ownerAddress,
+      owner: registrationOwner,
       duration: DURATION,
       secret,
       resolver: PUBLIC_RESOLVER,
@@ -442,10 +454,13 @@ async function main(): Promise<void> {
     console.log("         ✅  Commitment confirmed on-chain\n");
 
     // ── Wait for minCommitmentAge ──────────────────────────────────────────
-    const waitMs = Number(minAge) * 1000 + 3000; // +3s buffer
+    // Buffer increased to 15s — Sepolia block times are ~12s so 3s is
+    // too tight and causes CommitmentTooNew reverts.
+    const BUFFER_S = 15;
+    const waitMs = Number(minAge) * 1000 + BUFFER_S * 1000;
     if (waitMs > 2000) {
       console.log(
-        `  ⏳  Waiting ${Number(minAge)}s before registration can proceed…`,
+        `  ⏳  Waiting ${Number(minAge) + BUFFER_S}s (${Number(minAge)}s min + ${BUFFER_S}s buffer) before registration…`,
       );
       const start = Date.now();
       while (Date.now() - start < waitMs) {
@@ -453,10 +468,55 @@ async function main(): Promise<void> {
         progress(`  ⏳  ${remaining}s remaining…`);
         await sleep(1000);
       }
-      console.log("\n  ✅  Wait complete\n");
+      console.log("\n  ✅  Local wait complete\n");
     } else {
       console.log("  ℹ️   minCommitmentAge = 0, proceeding immediately\n");
       await sleep(1000);
+    }
+
+    // ── On-chain readiness check ──────────────────────────────────────────
+    // Poll the contract to confirm the commitment timestamp is old enough
+    // from the chain's perspective (block.timestamp >= commitTs + minAge).
+    // This eliminates false starts caused by inconsistent testnet block times.
+    console.log("  🔍  Verifying commitment maturity on-chain…");
+    const MAX_READINESS_POLLS = 20; // ~60s max extra wait
+    for (let i = 0; i < MAX_READINESS_POLLS; i++) {
+      const commitTs = (await publicClient.readContract({
+        address: ETH_REGISTRAR_CONTROLLER,
+        abi: registrarAbi,
+        functionName: "commitments",
+        args: [commitment],
+      })) as bigint;
+
+      if (commitTs === 0n) {
+        // Commitment was already consumed or never stored — proceed
+        // (this can happen if the commit was replayed or already registered)
+        console.log("  ⚠️   Commitment not found on-chain (may have expired). Proceeding anyway…\n");
+        break;
+      }
+
+      const latestBlock = await publicClient.getBlock({ blockTag: "latest" });
+      const blockTs = latestBlock.timestamp;
+      const readyAt = commitTs + minAge;
+
+      if (blockTs >= readyAt) {
+        console.log(
+          `  ✅  Commitment is mature (block.timestamp ${blockTs} >= readyAt ${readyAt})\n`,
+        );
+        break;
+      }
+
+      const gap = Number(readyAt - blockTs);
+      if (i === MAX_READINESS_POLLS - 1) {
+        throw new Error(
+          `Commitment still too new after ${MAX_READINESS_POLLS} polls. ` +
+          `block.timestamp=${blockTs}, readyAt=${readyAt}, gap=${gap}s. ` +
+          `Try again in a few seconds.`,
+        );
+      }
+
+      progress(`  ⏳  Commitment not yet mature (${gap}s to go), polling again in 3s…`);
+      await sleep(3000);
     }
 
     // ── Tx 2: register ────────────────────────────────────────────────────
@@ -503,12 +563,30 @@ async function main(): Promise<void> {
   //               → use NameWrapper.setSubnodeRecord(parentNode, string label, …)
   //   Unwrapped → ENS Registry owner of parent == user wallet
   //               → use ENS Registry.setSubnodeRecord(parentNode, bytes32 labelhash, …)
-  const parentRegistryOwner = (await publicClient.readContract({
+  let parentRegistryOwner = (await publicClient.readContract({
     address: ENS_REGISTRY,
     abi: ensRegistryAbi,
     functionName: "owner",
     args: [parentNode],
   })) as `0x${string}`;
+
+  // If we just registered the name, the RPC may take a few seconds to
+  // reflect the new owner in the ENS Registry. Poll until it's set.
+  let pollCount = 0;
+  while (
+    parentRegistryOwner === "0x0000000000000000000000000000000000000000" &&
+    pollCount < 10
+  ) {
+    console.log("  ⏳  Waiting for parent ENS owner to sync on-chain...");
+    await sleep(3000);
+    parentRegistryOwner = (await publicClient.readContract({
+      address: ENS_REGISTRY,
+      abi: ensRegistryAbi,
+      functionName: "owner",
+      args: [parentNode],
+    })) as `0x${string}`;
+    pollCount++;
+  }
 
   const parentIsWrapped =
     parentRegistryOwner.toLowerCase() === NAME_WRAPPER.toLowerCase();
@@ -559,6 +637,31 @@ async function main(): Promise<void> {
   }
 
   if (shouldWriteSubdomain) {
+    // Guard: signer must own the parent to call setSubnodeRecord.
+    // If the parent is already owned by --owner (e.g. after a partial-failure re-run)
+    // and the signer is different, we cannot proceed automatically.
+    if (
+      delegatedOwner &&
+      !parentIsWrapped &&
+      parentRegistryOwner.toLowerCase() === ownerAddress.toLowerCase() &&
+      parentRegistryOwner.toLowerCase() !== account.address.toLowerCase()
+    ) {
+      console.error(
+        `\n❌  Cannot create subdomain: "${baseDomain}" is owned by ${ownerAddress}\n` +
+        `    but the signer (${account.address}) is different and lacks permission.\n\n` +
+        `    To complete setup, call setSubnodeRecord from the --owner wallet:\n\n` +
+        `    ENS Registry: ${ENS_REGISTRY}\n` +
+        `    Function:     setSubnodeRecord(\n` +
+        `                    parentNode: ${parentNode},\n` +
+        `                    label:      ${labelhash(subdomain)},\n` +
+        `                    owner:      ${ownerAddress},\n` +
+        `                    resolver:   ${PUBLIC_RESOLVER},\n` +
+        `                    ttl:        0\n` +
+        `                  )\n`,
+      );
+      process.exit(1);
+    }
+
     let subTxHash: `0x${string}`;
 
     if (parentIsWrapped) {
@@ -610,6 +713,27 @@ async function main(): Promise<void> {
       `         ✅  Subdomain ${subdomainAction}! Gas used: ${subReceipt.gasUsed.toLocaleString()}\n`,
     );
   }
+
+  // ── Transfer parent to --owner (if delegated) ─────────────────────────────
+  // When --owner differs from the signer we registered with owner=signer so we
+  // could create the subdomain. Now hand the parent node over to --owner.
+  if (delegatedOwner && !isAlreadyOwned) {
+    console.log(
+      `  [4/4] Transferring "${baseDomain}" ownership to --owner (Tx 4)…`,
+    );
+    const transferHash = await walletClient.writeContract({
+      address: ENS_REGISTRY,
+      abi: ensRegistryAbi,
+      functionName: "setOwner",
+      args: [parentNode, ownerAddress],
+    });
+    console.log(`         tx: ${transferHash}`);
+    await publicClient.waitForTransactionReceipt({ hash: transferHash });
+    console.log(
+      `         ✅  "${baseDomain}" ownership transferred to ${ownerAddress}\n`,
+    );
+  }
+
 
   // ── Ownership verification ────────────────────────────────────────────────
   const finalOwner = (await publicClient.readContract({
@@ -686,9 +810,15 @@ main().catch((err) => {
   const msg = (err as Error).message ?? String(err);
   console.error(`\n❌  ENS setup failed: ${msg}`);
 
-  if (msg.includes("CommitmentTooNew") || msg.includes("commitment")) {
+  if (msg.includes("74480cc9") || msg.includes("CommitmentTooNew")) {
     console.error(
-      "   💡  The commitment is too new. Wait ~60s and run the script again.\n",
+      "   💡  CommitmentTooNew — the commitment hasn't matured on-chain yet.\n" +
+      "       The minCommitmentAge window has not elapsed from the chain's perspective.\n" +
+      "       Just re-run the script — it will re-commit and wait longer.\n",
+    );
+  } else if (msg.includes("CommitmentTooOld") || msg.includes("256e2216")) {
+    console.error(
+      "   💡  CommitmentTooOld — the commitment expired (>24h). Re-run the script.\n",
     );
   } else if (msg.includes("InsufficientValue")) {
     console.error(
