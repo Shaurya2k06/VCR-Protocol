@@ -26,6 +26,12 @@ export interface IAgent extends Document {
     agentUri: string;
     /** IPFS URI of the VCR Policy JSON */
     policyUri?: string;
+    /** Frontend-displayable rules/regulations document link (Fileverse/IPFS/gateway URL) */
+    rulesDocumentUrl?: string;
+    /** Raw rules/regulations document content snapshot (JSON string) */
+    rulesDocumentRaw?: string;
+    /** Origin of the stored rules/regulations document */
+    rulesDocumentSource?: "fileverse" | "ipfs" | "inline";
     /** Policy CID (without ipfs:// prefix) */
     policyCid?: string;
     /** BitGo wallet ID */
@@ -58,6 +64,12 @@ const AgentSchema = new Schema<IAgent>(
         headerUri: { type: String },
         agentUri: { type: String, required: true },
         policyUri: { type: String },
+        rulesDocumentUrl: { type: String },
+        rulesDocumentRaw: { type: String },
+        rulesDocumentSource: {
+            type: String,
+            enum: ["fileverse", "ipfs", "inline"],
+        },
         policyCid: { type: String },
         bitgoWalletId: { type: String },
         contractRegistryAddress: { type: String },
@@ -129,6 +141,21 @@ export async function updateAgentPolicy(
     return Agent.findOneAndUpdate(
         { agentId },
         { $set: { policyUri, policyCid } },
+        { new: true }
+    );
+}
+
+export async function updateAgentRulesDocument(
+    agentId: number,
+    rulesDocument: {
+        rulesDocumentUrl?: string;
+        rulesDocumentRaw?: string;
+        rulesDocumentSource?: "fileverse" | "ipfs" | "inline";
+    }
+): Promise<IAgent | null> {
+    return Agent.findOneAndUpdate(
+        { agentId },
+        { $set: rulesDocument },
         { new: true }
     );
 }

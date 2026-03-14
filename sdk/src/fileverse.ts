@@ -1,11 +1,12 @@
 import { Agent } from "@fileverse/agents";
 import { PinataStorageProvider } from "@fileverse/agents/storage/index.js";
+import fs from "fs/promises";
 import stringify from "json-stringify-deterministic";
+import path from "path";
 import { privateKeyToAccount } from "viem/accounts";
 import type { FileversePolicyResult, VCRPolicy } from "./types.js";
 
 export const FILEVERSE_ACTIVITY_URL = "https://agents.fileverse.io/";
-
 function getFileverseAgent(): Agent {
   const privateKey = process.env.PRIVATE_KEY as `0x${string}` | undefined;
   const pimlicoApiKey = process.env.PIMLICO_API_KEY;
@@ -47,11 +48,41 @@ export function getFileverseActivityUrl(): string {
 function buildFileversePolicyMetadata(policy: VCRPolicy): Record<string, unknown> {
   return {
     kind: "vcr-policy",
+    title: policy.ensName ? `${policy.ensName} Policy` : `Agent Policy ${policy.agentId}`,
     agentId: policy.agentId,
     ensName: policy.ensName,
     createdAt: policy.metadata.createdAt,
     createdBy: policy.metadata.createdBy,
   };
+}
+
+function toUrlSafeBase64(value: string): string {
+  return value.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function createPolicyDocument(policy: VCRPolicy): string {
+  return stringify(policy, { space: "  " });
+}
+
+async function buildFileverseViewerUrl(
+  namespace: string,
+  portalAddress: string,
+  fileId: string,
+): Promise<string | undefined> {
+  const credsPath = path.resolve("creds", `${namespace}.json`);
+
+  try {
+    const raw = await fs.readFile(credsPath, "utf8");
+    const creds = JSON.parse(raw) as {
+      portalKeys?: { viewSecret?: string };
+    };
+    const viewSecret = creds.portalKeys?.viewSecret;
+    if (!viewSecret) return undefined;
+
+    return `https://docs.fileverse.io/${portalAddress}/${fileId}#key=${toUrlSafeBase64(viewSecret)}`;
+  } catch {
+    return undefined;
+  }
 }
 
 export async function storePolicyDocument(
@@ -62,22 +93,27 @@ export async function storePolicyDocument(
   const baseNamespace = normalizePolicyNamespace(namespace);
   await agent.setupStorage(baseNamespace);
 
-  // Fileverse stores public string content. We persist canonical JSON so the
-  // resulting IPFS object is stable and machine-readable.
   const result = await agent.create(
-    stringify(policy),
+    createPolicyDocument(policy),
     buildFileversePolicyMetadata(policy),
   );
   const file = await agent.getFile(result.fileId);
+  const fileId = String(result.fileId);
+  const viewerUrl = await buildFileverseViewerUrl(
+    file.namespace,
+    file.portal,
+    fileId,
+  );
 
   return {
-    fileId: String(result.fileId),
+    fileId,
     portalAddress: file.portal,
     namespace: baseNamespace,
     contentUri: file.contentIpfsHash,
     metadataUri: file.metadataIpfsHash,
     txHash: result.hash,
     activityUrl: getFileverseActivityUrl(),
+    viewerUrl,
   };
 }
 
