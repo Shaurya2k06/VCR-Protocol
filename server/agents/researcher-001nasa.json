@@ -1,0 +1,21 @@
+{
+  "ensName": "researcher-001nasa.com.eth",
+  "walletId": "69b5a07a52d0732a20ce0e70fde26404",
+  "walletAddress": "0x17c8502a0d4ffe7a4ae2afd69957905103a3279b",
+  "registryWalletAddress": "0x9a6833295420d836367aa1e96eab549aba5ee410",
+  "agentId": 1809,
+  "erc8004AgentUri": "ipfs://bafkreidc6csqqds4mrwgxqmmpmtnxvraw6bkjfyy4bvbclkxcapsbwbicm",
+  "erc8004AgentUriTx": "0xad97a777652af2098456d0065400b531bcb538675810d6d074252095cfb98a32",
+  "policyCid": "bafkreia2zfpehqt57naf5vyylhhf4a4axe4x5inlvno4fuwxr6pffhj3xe",
+  "policyUri": "ipfs://bafkreia2zfpehqt57naf5vyylhhf4a4axe4x5inlvno4fuwxr6pffhj3xe",
+  "policyGatewayUrl": "https://rose-obliged-wildcat-829.mypinata.cloud/ipfs/bafkreia2zfpehqt57naf5vyylhhf4a4axe4x5inlvno4fuwxr6pffhj3xe",
+  "policyFileId": "0",
+  "policyPortalAddress": "0x6F20E3f1Df155eDf1bcB6c293D60aF2461fE97E2",
+  "policyNamespace": "vcr-policy-researcher-001nasa",
+  "bitgoUserKeyCaptured": false,
+  "policyHash": "0xb48d38f93eaa084033fc5970bf96e559c33c4cdc07d889ab00b4d63f9590739d",
+  "registrationTx": "0xd6bf8baefd10d7fb05fb7dd760313d83a6eaa80c10b42d10db2eacc65f3035e8",
+  "ensTx": "",
+  "createdAt": "2026-03-14T17:53:56.511Z",
+  "walletPassphrase": "vcr-researcher-001nasa-1773510759408"
+}

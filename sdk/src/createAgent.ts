@@ -140,6 +140,7 @@ export async function createAgent(
   },
   options?: {
     logger?: (message: string) => void;
+    skipEnsBinding?: boolean;
   },
 ): Promise<AgentRecord> {
   // Inject env vars so downstream helpers (bitgo.ts, erc8004.ts, ens.ts)
@@ -321,18 +322,30 @@ export async function createAgent(
   logCreateAgentDetail(`ERC-8004 setAgentURI tx: ${agentUriTx}`, options?.logger);
 
   // ── Step 5: Bind ENS via ENSIP-25 + contenthash ──────────────────────────
-  emitCreateAgentLog("[5/5] Binding ENS via ENSIP-25 + contenthash", options?.logger);
-  logCreateAgentDetail(`ENS name: ${ensName}`, options?.logger);
-  logCreateAgentDetail(`Policy URI for ENS: ${policyUri}`, options?.logger);
-  const { txHash: ensTx } = await setAllENSRecords(
-    ensName,
-    agentId,
-    policyUri,
-    undefined,
-    undefined,
-    options?.logger,
-  );
-  logCreateAgentDetail(`ENS records set tx: ${ensTx}`, options?.logger);
+  let ensTx = "";
+  if (options?.skipEnsBinding) {
+    emitCreateAgentLog("[5/5] Deferring ENS binding to the connected wallet", options?.logger);
+    logCreateAgentDetail(`ENS name: ${ensName}`, options?.logger);
+    logCreateAgentDetail(`Policy URI for ENS: ${policyUri}`, options?.logger);
+    logCreateAgentDetail(
+      "Skipping backend ENS write so the frontend wallet can submit the self-owned ENS transactions.",
+      options?.logger,
+    );
+  } else {
+    emitCreateAgentLog("[5/5] Binding ENS via ENSIP-25 + contenthash", options?.logger);
+    logCreateAgentDetail(`ENS name: ${ensName}`, options?.logger);
+    logCreateAgentDetail(`Policy URI for ENS: ${policyUri}`, options?.logger);
+    const ensResult = await setAllENSRecords(
+      ensName,
+      agentId,
+      policyUri,
+      undefined,
+      undefined,
+      options?.logger,
+    );
+    ensTx = ensResult.txHash;
+    logCreateAgentDetail(`ENS records set tx: ${ensTx}`, options?.logger);
+  }
 
   // ── Bonus: Link BitGo wallet to ERC-8004 agent ────────────────────────────
   // On BitGo TSS wallets, signTypedData may recover to baseAddress rather than

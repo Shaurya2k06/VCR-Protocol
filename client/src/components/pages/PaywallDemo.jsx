@@ -143,6 +143,9 @@ export default function PaywallDemo() {
   const [contentResult, setContentResult] = useState(null);
   const [settleResult, setSettleResult] = useState(null);
   const [logs, setLogs] = useState([]);
+  const [suiteLoading, setSuiteLoading] = useState(false);
+  const [suiteCommitSuccess, setSuiteCommitSuccess] = useState(false);
+  const [suiteResult, setSuiteResult] = useState(null);
 
   useEffect(() => {
     let mounted = true;
@@ -372,6 +375,29 @@ export default function PaywallDemo() {
     chain.trim() &&
     recipient.trim();
 
+  const runProtocolSuite = async () => {
+    if (!ensName.trim()) {
+      setError("Enter an ENS name before running the protocol suite.");
+      return;
+    }
+
+    setError("");
+    setSuiteLoading(true);
+    setSuiteResult(null);
+
+    try {
+      const result = await vcr.runProtocolSuite(ensName.trim(), {
+        commitSuccess: suiteCommitSuccess,
+      });
+      setSuiteResult(result);
+      await loadLogs(ensName.trim());
+    } catch (suiteError) {
+      setError(suiteError.message);
+    } finally {
+      setSuiteLoading(false);
+    }
+  };
+
   return (
     <div className="page">
       <div className="container">
@@ -385,6 +411,116 @@ export default function PaywallDemo() {
             This page uses the real backend paywall, real VCR verification, and
             real database-backed spend tracking. No simulated frontend flow.
           </p>
+        </div>
+
+        <div className="card" style={{ marginBottom: 24 }}>
+          <div className="card-header">
+            <div>
+              <h2>Protocol test suite</h2>
+              <p>
+                Run an automated set of x402-style micropayment scenarios against the live ENS policy. One path should pass, several should fail, and each result is checked against the actual permissions on the agent.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={runProtocolSuite}
+              disabled={!ensName.trim() || suiteLoading}
+            >
+              {suiteLoading ? "Running suite..." : "Run suite"}
+            </button>
+          </div>
+
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
+            <label className="wizard-toggle-row" style={{ fontFamily: "var(--font-mono)" }}>
+              <input
+                type="checkbox"
+                checked={suiteCommitSuccess}
+                onChange={(event) => setSuiteCommitSuccess(event.target.checked)}
+              />
+              <span>Commit the allowed micropayment to the daily spend ledger</span>
+            </label>
+            <div className="code-block" style={{ padding: "10px 14px" }}>
+              Target ENS: {ensName || "Enter an ENS name below"}
+            </div>
+          </div>
+
+          {suiteResult ? (
+            <div style={{ marginTop: 20, display: "grid", gap: 16 }}>
+              <div className="grid-3">
+                <div className="card" style={{ marginBottom: 0 }}>
+                  <div className="card-header"><h2 style={{ fontSize: "0.95rem" }}>Scenarios</h2></div>
+                  <div style={{ fontSize: "2rem", fontFamily: "var(--font-mono)", color: "var(--neon-blue)", fontWeight: 700 }}>
+                    {suiteResult.suite.scenarios.length}
+                  </div>
+                </div>
+                <div className="card" style={{ marginBottom: 0 }}>
+                  <div className="card-header"><h2 style={{ fontSize: "0.95rem" }}>Passed</h2></div>
+                  <div style={{ fontSize: "2rem", fontFamily: "var(--font-mono)", color: "var(--neon-green)", fontWeight: 700 }}>
+                    {suiteResult.suite.scenarios.filter((scenario) => scenario.passed).length}
+                  </div>
+                </div>
+                <div className="card" style={{ marginBottom: 0 }}>
+                  <div className="card-header"><h2 style={{ fontSize: "0.95rem" }}>Current daily spend</h2></div>
+                  <div style={{ fontSize: "1.3rem", fontFamily: "var(--font-mono)", color: "var(--neon-amber)", fontWeight: 700 }}>
+                    {suiteResult.suite.currentDailySpent}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ display: "grid", gap: 12 }}>
+                {suiteResult.suite.scenarios.map((scenario, index) => (
+                  <div
+                    key={scenario.id}
+                    className="card"
+                    style={{
+                      marginBottom: 0,
+                      background: scenario.passed
+                        ? "linear-gradient(135deg, rgba(74,222,128,0.10), rgba(74,222,128,0.04))"
+                        : "linear-gradient(135deg, rgba(248,113,113,0.12), rgba(248,113,113,0.04))",
+                    }}
+                  >
+                    <div className="card-header" style={{ marginBottom: 14 }}>
+                      <div>
+                        <h2 style={{ fontSize: "1rem" }}>
+                          {index + 1}. {scenario.label}
+                        </h2>
+                        <p>{scenario.description}</p>
+                      </div>
+                      <span className={`badge ${scenario.passed ? "badge-green" : "badge-red"}`}>
+                        {scenario.actualAllowed ? "allowed" : "blocked"}
+                      </span>
+                    </div>
+
+                    <div className="grid-2">
+                      <div className="code-block" style={{ fontSize: "0.8rem" }}>
+                        Request
+                        {"\n"}
+                        {JSON.stringify(scenario.request, null, 2)}
+                      </div>
+                      <div className="code-block" style={{ fontSize: "0.8rem" }}>
+                        Expected: {scenario.expectedAllowed ? "allowed" : "blocked"}
+                        {"\n"}
+                        Actual: {scenario.actualAllowed ? "allowed" : "blocked"}
+                        {"\n"}
+                        Daily spent at check: {scenario.dailySpentAtCheck}
+                        {"\n"}
+                        Mode: {scenario.simulated ? "simulated edge case" : "live policy inputs"}
+                        {"\n"}
+                        Reason: {scenario.reason || "Policy allowed the request"}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {suiteResult.committedResult ? (
+                <div className="alert alert-success">
+                  The allowed micropayment was recorded successfully. Daily spend is now {suiteResult.committedResult.dailySpent}.
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
         <div className="grid-2">

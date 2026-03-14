@@ -1,18 +1,272 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { vcr } from "../../lib/api";
+
+function getWalletProvider() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  return window.ethereum ?? null;
+}
+
+function shortenAddress(value = "") {
+  if (!value) return "Not connected";
+  return `${value.slice(0, 6)}...${value.slice(-4)}`;
+}
+
+function formatDate(value) {
+  if (!value) return "Unknown";
+  try {
+    return new Date(value).toLocaleString();
+  } catch {
+    return value;
+  }
+}
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error(`Failed to read ${file.name}`));
+    reader.readAsDataURL(file);
+  });
+}
+
+function buildProfileUpdateMessage(agentId, ensName, issuedAt) {
+  return [
+    "VCR ENS profile update",
+    `Agent ID: ${agentId}`,
+    `ENS: ${ensName}`,
+    `Issued At: ${issuedAt}`,
+  ].join("\n");
+}
+
+function AgentCard({ agent, onSelect, owned }) {
+  return (
+    <button
+      type="button"
+      className="card"
+      onClick={() => onSelect(agent)}
+      style={{
+        textAlign: "left",
+        display: "grid",
+        gap: 16,
+        background: owned
+          ? "linear-gradient(135deg, rgba(99,210,255,0.10), rgba(167,139,250,0.08))"
+          : "var(--nb-board)",
+      }}
+    >
+      {agent.headerUri ? (
+        <div
+          style={{
+            height: 140,
+            borderRadius: 18,
+            backgroundImage: `linear-gradient(rgba(17,24,39,0.18), rgba(17,24,39,0.18)), url(${agent.headerUri})`,
+            backgroundSize: "cover",
+            backgroundPosition: "center",
+            border: "3px solid var(--nb-ink)",
+            boxShadow: "4px 4px 0 var(--nb-ink)",
+          }}
+        />
+      ) : (
+        <div
+          style={{
+            height: 140,
+            borderRadius: 18,
+            background: "linear-gradient(135deg, #fef3c7, #dbeafe)",
+            border: "3px solid var(--nb-ink)",
+            boxShadow: "4px 4px 0 var(--nb-ink)",
+          }}
+        />
+      )}
+
+      <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
+        <div
+          style={{
+            width: 72,
+            height: 72,
+            borderRadius: "50%",
+            overflow: "hidden",
+            border: "3px solid var(--nb-ink)",
+            background: "#fff",
+            boxShadow: "4px 4px 0 var(--nb-ink)",
+            flexShrink: 0,
+          }}
+        >
+          {agent.avatarUri ? (
+            <img
+              src={agent.avatarUri}
+              alt={agent.name}
+              style={{ width: "100%", height: "100%", objectFit: "cover" }}
+            />
+          ) : (
+            <div
+              style={{
+                width: "100%",
+                height: "100%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontFamily: "var(--font-display)",
+                fontSize: "1.5rem",
+              }}
+            >
+              {agent.name?.slice(0, 1)?.toUpperCase() || "A"}
+            </div>
+          )}
+        </div>
+
+        <div style={{ minWidth: 0 }}>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
+            <span className="badge badge-blue">Agent #{agent.agentId}</span>
+            {owned ? <span className="badge badge-purple">My agent</span> : null}
+          </div>
+          <h2 style={{ fontSize: "1.25rem", marginBottom: 6 }}>{agent.ensName || agent.name}</h2>
+          <p style={{ color: "var(--text-muted)", fontSize: "0.88rem", marginBottom: 10 }}>
+            {agent.description || "No description provided yet."}
+          </p>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {(agent.supportedTokens || []).map((token) => (
+              <span key={token} className="badge badge-green">{token}</span>
+            ))}
+            {(agent.supportedChains || []).map((chain) => (
+              <span key={chain} className="badge badge-gray">{chain}</span>
+            ))}
+          </div>
+        </div>
+      </div>
+    </button>
+  );
+}
 
 export default function PolicyExplorer() {
   const [search, setSearch] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [loadingLookup, setLoadingLookup] = useState(false);
+  const [loadingAgents, setLoadingAgents] = useState(true);
+  const [loadingMine, setLoadingMine] = useState(false);
   const [result, setResult] = useState(null);
   const [history, setHistory] = useState(null);
   const [error, setError] = useState("");
-  const [activeTab, setActiveTab] = useState("policy");
+  const [activeTab, setActiveTab] = useState("lookup");
+  const [wallet, setWallet] = useState({ address: "", status: "idle", error: "" });
+  const [allAgents, setAllAgents] = useState([]);
+  const [myAgents, setMyAgents] = useState([]);
+  const [selectedAgent, setSelectedAgent] = useState(null);
+  const [avatarFile, setAvatarFile] = useState(null);
+  const [headerFile, setHeaderFile] = useState(null);
+  const [avatarPreview, setAvatarPreview] = useState("");
+  const [headerPreview, setHeaderPreview] = useState("");
+  const [uploadingProfile, setUploadingProfile] = useState(false);
+
+  const connectWallet = async () => {
+    const provider = getWalletProvider();
+    if (!provider) {
+      setWallet({ address: "", status: "error", error: "Install a wallet like MetaMask to load your agents." });
+      return;
+    }
+
+    setWallet((current) => ({ ...current, status: "connecting", error: "" }));
+
+    try {
+      const accounts = await provider.request({ method: "eth_requestAccounts" });
+      const address = Array.isArray(accounts) ? accounts[0] ?? "" : "";
+      if (!address) {
+        throw new Error("No wallet account returned.");
+      }
+
+      setWallet({ address, status: "connected", error: "" });
+    } catch (walletError) {
+      setWallet({ address: "", status: "error", error: walletError.message });
+    }
+  };
+
+  const loadAllAgents = async () => {
+    setLoadingAgents(true);
+    try {
+      const response = await vcr.getAllAgents();
+      setAllAgents(response.agents ?? []);
+    } catch (loadError) {
+      setError(loadError.message);
+    } finally {
+      setLoadingAgents(false);
+    }
+  };
+
+  const loadMyAgents = async (address) => {
+    if (!address) {
+      setMyAgents([]);
+      return;
+    }
+
+    setLoadingMine(true);
+    try {
+      const response = await vcr.getAgentsByOwner(address);
+      setMyAgents(response.agents ?? []);
+    } catch (loadError) {
+      setError(loadError.message);
+    } finally {
+      setLoadingMine(false);
+    }
+  };
+
+  useEffect(() => {
+    loadAllAgents();
+  }, []);
+
+  useEffect(() => {
+    const provider = getWalletProvider();
+    if (!provider) {
+      return undefined;
+    }
+
+    let active = true;
+
+    async function syncWallet() {
+      try {
+        const accounts = await provider.request({ method: "eth_accounts" });
+        if (!active || !Array.isArray(accounts)) {
+          return;
+        }
+
+        const address = accounts[0] ?? "";
+        setWallet({
+          address,
+          status: address ? "connected" : "idle",
+          error: "",
+        });
+      } catch (walletError) {
+        if (!active) return;
+        setWallet({ address: "", status: "error", error: walletError.message });
+      }
+    }
+
+    function handleAccountsChanged(accounts) {
+      if (!active) return;
+      const address = accounts?.[0] ?? "";
+      setWallet({ address, status: address ? "connected" : "idle", error: "" });
+    }
+
+    syncWallet();
+    provider.on?.("accountsChanged", handleAccountsChanged);
+
+    return () => {
+      active = false;
+      provider.removeListener?.("accountsChanged", handleAccountsChanged);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (wallet.address) {
+      loadMyAgents(wallet.address);
+    } else {
+      setMyAgents([]);
+    }
+  }, [wallet.address]);
 
   const explore = async (e) => {
     e.preventDefault();
     if (!search.trim()) return;
-    setLoading(true);
+    setLoadingLookup(true);
     setError("");
     setResult(null);
     setHistory(null);
@@ -25,180 +279,426 @@ export default function PolicyExplorer() {
       else setError(policyRes.reason.message);
       if (histRes.status === "fulfilled") setHistory(histRes.value);
     } finally {
-      setLoading(false);
+      setLoadingLookup(false);
     }
   };
 
   const policy = result?.policy;
   const c = policy?.constraints;
 
+  const selectedAgentOwned = useMemo(() => {
+    if (!selectedAgent || !wallet.address) return false;
+    const address = wallet.address.toLowerCase();
+    return (
+      selectedAgent.ownerAddress?.toLowerCase() === address ||
+      selectedAgent.creatorAddress?.toLowerCase() === address
+    );
+  }, [selectedAgent, wallet.address]);
+
+  const handleAvatarChange = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setAvatarFile(file);
+    setAvatarPreview(await fileToDataUrl(file));
+  };
+
+  const handleHeaderChange = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setHeaderFile(file);
+    setHeaderPreview(await fileToDataUrl(file));
+  };
+
+  const uploadProfile = async () => {
+    if (!selectedAgent) return;
+    if (!avatarPreview && !headerPreview) {
+      setError("Choose an avatar or header image before uploading.");
+      return;
+    }
+
+    setUploadingProfile(true);
+    setError("");
+
+    try {
+      const provider = getWalletProvider();
+      if (!provider || !wallet.address) {
+        throw new Error("Connect the creator wallet before updating ENS profile media.");
+      }
+
+      const issuedAt = new Date().toISOString();
+      const message = buildProfileUpdateMessage(
+        selectedAgent.agentId,
+        selectedAgent.ensName,
+        issuedAt,
+      );
+      const signature = await provider.request({
+        method: "personal_sign",
+        params: [message, wallet.address],
+      });
+
+      const response = await vcr.updateAgentProfile(selectedAgent.agentId, {
+        avatarDataUrl: avatarPreview || undefined,
+        headerDataUrl: headerPreview || undefined,
+        actorAddress: wallet.address,
+        issuedAt,
+        signature,
+      });
+
+      const updatedAgent = response.agent;
+      setSelectedAgent(updatedAgent);
+      setAllAgents((current) =>
+        current.map((agent) => (agent.agentId === updatedAgent.agentId ? updatedAgent : agent)),
+      );
+      setMyAgents((current) =>
+        current.map((agent) => (agent.agentId === updatedAgent.agentId ? updatedAgent : agent)),
+      );
+      setAvatarFile(null);
+      setHeaderFile(null);
+      setAvatarPreview("");
+      setHeaderPreview("");
+    } catch (uploadError) {
+      setError(uploadError.message);
+    } finally {
+      setUploadingProfile(false);
+    }
+  };
+
   return (
     <div className="page">
       <div className="container">
         <div className="page-header">
-          <div className="badge badge-amber" style={{ marginBottom: 12 }}>ENS + IPFS Lookup</div>
-          <h1>Policy Explorer</h1>
-          <p>Search any ENS name to resolve its VCR policy from IPFS and inspect its constraints</p>
+          <div className="badge badge-amber" style={{ marginBottom: 12 }}>
+            ENS + Agent Directory
+          </div>
+          <h1>Agent Explorer</h1>
+          <p>
+            Search any ENS-linked policy, inspect your own agents, browse the full agent directory, and manage ENS avatar and header records from one place.
+          </p>
         </div>
 
-        {/* Search */}
-        <form onSubmit={explore} style={{ display: "flex", gap: 12, maxWidth: 560, margin: "0 auto 56px" }}>
-          <input
-            className="form-input"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="youragent.eth"
-            style={{ flex: 1, fontSize: "1rem" }}
-          />
-          <button className="btn btn-primary" type="submit" disabled={loading || !search.trim()}>
-            {loading ? <div className="spinner" /> : "Search"}
-          </button>
-        </form>
+        <div className="tabs" style={{ marginBottom: 28 }}>
+          {[
+            { id: "lookup", label: "Policy Lookup" },
+            { id: "mine", label: "My Agents" },
+            { id: "all", label: "All Agents" },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              className={`tab-btn${activeTab === tab.id ? " active" : ""}`}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
 
-        {error && (
-          <div className="alert alert-error" style={{ maxWidth: 640, margin: "0 auto 32px" }}>
+        {error ? (
+          <div className="alert alert-error" style={{ maxWidth: 920, margin: "0 auto 24px" }}>
             {error}
           </div>
-        )}
+        ) : null}
 
-        {result && policy && (
+        {activeTab === "lookup" && (
           <>
-            {/* Header */}
-            <div className="card" style={{ marginBottom: 24, background: "linear-gradient(135deg, rgba(99,210,255,0.05), rgba(167,139,250,0.05))" }}>
-              <div className="flex items-center justify-between flex-wrap gap-4">
-                <div>
-                  <div className="flex items-center gap-3 mb-2">
-                    <div className="status-dot green" />
-                    <span className="badge badge-green">Active Policy</span>
-                    <span className="badge badge-gray mono">v{policy.version}</span>
+            <form onSubmit={explore} style={{ display: "flex", gap: 12, maxWidth: 560, margin: "0 auto 56px" }}>
+              <input
+                className="form-input"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="youragent.eth"
+                style={{ flex: 1, fontSize: "1rem" }}
+              />
+              <button className="btn btn-primary" type="submit" disabled={loadingLookup || !search.trim()}>
+                {loadingLookup ? <div className="spinner" /> : "Search"}
+              </button>
+            </form>
+
+            {result && policy && (
+              <>
+                <div className="card" style={{ marginBottom: 24, background: "linear-gradient(135deg, rgba(99,210,255,0.05), rgba(167,139,250,0.05))" }}>
+                  <div className="flex items-center justify-between flex-wrap gap-4">
+                    <div>
+                      <div className="flex items-center gap-3 mb-2">
+                        <span className="badge badge-green">Active Policy</span>
+                        <span className="badge badge-gray mono">v{policy.version}</span>
+                      </div>
+                      <h2 style={{ fontSize: "1.4rem" }}>{result.ensName}</h2>
+                      <p style={{ color: "var(--text-muted)", fontSize: "0.82rem", fontFamily: "var(--font-mono)", marginTop: 4 }}>
+                        {result.policyUri}
+                      </p>
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>Created</div>
+                      <div style={{ fontSize: "0.875rem" }}>{new Date(policy.metadata?.createdAt).toLocaleDateString()}</div>
+                    </div>
                   </div>
-                  <h2 style={{ fontSize: "1.4rem" }}>{result.ensName}</h2>
-                  <p style={{ color: "var(--text-muted)", fontSize: "0.82rem", fontFamily: "var(--font-mono)", marginTop: 4 }}>
-                    {result.policyUri}
-                  </p>
                 </div>
-                <div style={{ textAlign: "right" }}>
-                  <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>Created</div>
-                  <div style={{ fontSize: "0.875rem" }}>{new Date(policy.metadata?.createdAt).toLocaleDateString()}</div>
-                  {policy.metadata?.expiresAt && (
-                    <>
-                      <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: 4 }}>Expires</div>
-                      <div style={{ fontSize: "0.875rem", color: "var(--neon-amber)" }}>{new Date(policy.metadata.expiresAt).toLocaleDateString()}</div>
-                    </>
+
+                <div className="grid-2">
+                  <div className="card">
+                    <div className="card-header"><h2>Policy summary</h2></div>
+                    <div style={{ display: "grid", gap: 12 }}>
+                      <div className="code-block">Max transaction: {c?.maxTransaction?.amount} {c?.maxTransaction?.token}</div>
+                      <div className="code-block">Daily limit: {c?.dailyLimit?.amount} {c?.dailyLimit?.token}</div>
+                      <div className="code-block">Allowed chains: {c?.allowedChains?.join(", ")}</div>
+                      <div className="code-block">Allowed tokens: {c?.allowedTokens?.join(", ")}</div>
+                    </div>
+                  </div>
+
+                  <div className="card">
+                    <div className="card-header"><h2>Recipients</h2></div>
+                    <div style={{ display: "grid", gap: 8 }}>
+                      {c?.allowedRecipients?.map((addr) => (
+                        <div key={addr} className="code-block" style={{ fontSize: "0.78rem", padding: "8px 12px" }}>
+                          {addr}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="card" style={{ marginTop: 24 }}>
+                  <div className="card-header"><h2>Spend history</h2></div>
+                  {!history?.history?.length ? (
+                    <p style={{ color: "var(--text-muted)" }}>No spend history found.</p>
+                  ) : (
+                    <div style={{ display: "grid", gap: 10 }}>
+                      {history.history.map((row, index) => (
+                        <div key={`${row.date}-${index}`} className="tx-row">
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontWeight: 700 }}>{row.date}</div>
+                            <div style={{ color: "var(--text-muted)", fontSize: "0.8rem" }}>{row.token}</div>
+                          </div>
+                          <div className="mono">{row.amountSpent}</div>
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
-              </div>
-            </div>
+              </>
+            )}
 
-            {/* Tabs */}
-            <div className="tabs">
-              {["policy", "constraints", "raw", "history"].map(t => (
-                <button key={t} className={`tab-btn${activeTab === t ? " active" : ""}`} onClick={() => setActiveTab(t)}>
-                  {t.charAt(0).toUpperCase() + t.slice(1)}
+            {!result && !loadingLookup && !error ? (
+              <div style={{ textAlign: "center", padding: "80px 0", color: "var(--text-muted)" }}>
+                <p>Enter an ENS name above to resolve its VCR policy and recorded spend history.</p>
+              </div>
+            ) : null}
+          </>
+        )}
+
+        {activeTab === "mine" && (
+          <>
+            <div className="card" style={{ marginBottom: 24 }}>
+              <div className="card-header">
+                <div>
+                  <h2>My agents</h2>
+                  <p>Connect the wallet you used to create agents to load your directory.</p>
+                </div>
+                <button type="button" className="btn btn-primary" onClick={connectWallet}>
+                  {wallet.status === "connecting" ? "Connecting..." : wallet.address ? "Reconnect wallet" : "Connect wallet"}
                 </button>
-              ))}
+              </div>
+
+              <div style={{ display: "grid", gap: 10 }}>
+                <div className="code-block">Connected wallet: {wallet.address || "Not connected"}</div>
+                {wallet.error ? <div className="alert alert-error">{wallet.error}</div> : null}
+              </div>
             </div>
 
-            {activeTab === "policy" && (
-              <div className="grid-3">
-                <div className="card">
-                  <div className="card-header"><h2 style={{ fontSize: "0.95rem" }}>Max Transaction</h2></div>
-                  <div style={{ fontSize: "2rem", fontFamily: "var(--font-mono)", color: "var(--neon-blue)", fontWeight: 700 }}>
-                    {c?.maxTransaction?.amount}
-                  </div>
-                  <div style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginTop: 4 }}>
-                    {c?.maxTransaction?.token} · {c?.maxTransaction?.chain}
-                  </div>
-                </div>
-
-                <div className="card">
-                  <div className="card-header"><h2 style={{ fontSize: "0.95rem" }}>Daily Limit</h2></div>
-                  <div style={{ fontSize: "2rem", fontFamily: "var(--font-mono)", color: "var(--neon-purple)", fontWeight: 700 }}>
-                    {c?.dailyLimit?.amount}
-                  </div>
-                  <div style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginTop: 4 }}>
-                    {c?.dailyLimit?.token} · {c?.dailyLimit?.chain}
-                  </div>
-                </div>
-
-                <div className="card">
-                  <div className="card-header"><h2 style={{ fontSize: "0.95rem" }}>Time Window</h2></div>
-                  <div style={{ fontSize: "1.5rem", fontFamily: "var(--font-mono)", color: "var(--neon-amber)", fontWeight: 700 }}>
-                    {c?.timeRestrictions ? `${c.timeRestrictions.allowedHours[0]}:00 – ${c.timeRestrictions.allowedHours[1]}:00` : "Unrestricted"}
-                  </div>
-                  <div style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginTop: 4 }}>UTC</div>
-                </div>
-              </div>
-            )}
-
-            {activeTab === "constraints" && (
-              <div className="grid-2">
-                <div className="card">
-                  <div className="card-header"><h2>Allowed Tokens</h2></div>
-                  <div className="flex gap-2 flex-wrap">
-                    {c?.allowedTokens?.map(t => <span key={t} className="badge badge-green">{t}</span>)}
-                  </div>
-
-                  <div className="divider" />
-
-                  <div className="card-header"><h2>Allowed Chains</h2></div>
-                  <div className="flex gap-2 flex-wrap">
-                    {c?.allowedChains?.map(ch => <span key={ch} className="badge badge-blue">{ch}</span>)}
-                  </div>
-                </div>
-
-                <div className="card">
-                  <div className="card-header">
-                    <h2>Allowed Recipients</h2>
-                    <p>{c?.allowedRecipients?.length} addresses whitelisted</p>
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    {c?.allowedRecipients?.map(addr => (
-                      <div key={addr} className="code-block truncate" style={{ padding: "8px 12px", fontSize: "0.78rem" }}>{addr}</div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {activeTab === "raw" && (
-              <pre className="code-block" style={{ maxHeight: 500, overflow: "auto" }}>
-                {JSON.stringify(policy, null, 2)}
-              </pre>
-            )}
-
-            {activeTab === "history" && (
+            {loadingMine ? (
+              <div className="card"><p>Loading your agents...</p></div>
+            ) : myAgents.length === 0 ? (
               <div className="card">
-                <div className="card-header"><h2>Spend History</h2><p>Last 30 days of recorded spend</p></div>
-                {!history?.history?.length ? (
-                  <div style={{ textAlign: "center", padding: "40px 0", color: "var(--text-muted)" }}>No spend history found</div>
-                ) : (
-                  <div>
-                    {history.history.map((row, i) => (
-                      <div key={i} className="tx-row">
-                        <div className="status-dot blue" />
-                        <div style={{ flex: 1 }}>
-                          <div style={{ fontWeight: 600, fontSize: "0.875rem" }}>{row.date}</div>
-                          <div style={{ color: "var(--text-muted)", fontSize: "0.78rem" }}>{row.token}</div>
-                        </div>
-                        <div style={{ fontFamily: "var(--font-mono)", color: "var(--neon-amber)", fontSize: "0.875rem" }}>
-                          {row.amountSpent}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                <p style={{ color: "var(--text-muted)" }}>
+                  {wallet.address
+                    ? "No agents found for this wallet yet."
+                    : "Connect a wallet to load your agents."}
+                </p>
+              </div>
+            ) : (
+              <div className="grid-2">
+                {myAgents.map((agent) => (
+                  <AgentCard key={agent.agentId} agent={agent} onSelect={setSelectedAgent} owned />
+                ))}
               </div>
             )}
           </>
         )}
 
-        {!result && !loading && !error && (
-          <div style={{ textAlign: "center", padding: "80px 0", color: "var(--text-muted)" }}>
-            <div style={{ fontSize: "3rem", marginBottom: 16 }}>🔭</div>
-            <p>Enter an ENS name above to explore its VCR policy</p>
-          </div>
+        {activeTab === "all" && (
+          <>
+            {loadingAgents ? (
+              <div className="card"><p>Loading the full agent directory...</p></div>
+            ) : (
+              <div className="grid-2">
+                {allAgents.map((agent) => (
+                  <AgentCard
+                    key={agent.agentId}
+                    agent={agent}
+                    onSelect={setSelectedAgent}
+                    owned={
+                      Boolean(wallet.address) &&
+                      (
+                        agent.ownerAddress?.toLowerCase() === wallet.address.toLowerCase() ||
+                        agent.creatorAddress?.toLowerCase() === wallet.address.toLowerCase()
+                      )
+                    }
+                  />
+                ))}
+              </div>
+            )}
+          </>
         )}
+
+        {selectedAgent ? (
+          <div
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(17,24,39,0.45)",
+              backdropFilter: "blur(6px)",
+              zIndex: 120,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 24,
+            }}
+          >
+            <div className="card" style={{ width: "min(960px, 100%)", maxHeight: "calc(100vh - 48px)", overflow: "auto" }}>
+              <div className="card-header">
+                <div>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+                    <span className="badge badge-blue">Agent #{selectedAgent.agentId}</span>
+                    {selectedAgentOwned ? <span className="badge badge-purple">Editable</span> : null}
+                  </div>
+                  <h2>{selectedAgent.ensName}</h2>
+                  <p>{selectedAgent.description || "No description provided yet."}</p>
+                </div>
+                <button type="button" className="btn btn-ghost" onClick={() => setSelectedAgent(null)}>
+                  Close
+                </button>
+              </div>
+
+              {selectedAgent.headerUri ? (
+                <div
+                  style={{
+                    height: 200,
+                    borderRadius: 18,
+                    marginBottom: 20,
+                    backgroundImage: `url(${selectedAgent.headerUri})`,
+                    backgroundSize: "cover",
+                    backgroundPosition: "center",
+                    border: "3px solid var(--nb-ink)",
+                    boxShadow: "4px 4px 0 var(--nb-ink)",
+                  }}
+                />
+              ) : null}
+
+              <div className="grid-2">
+                <div className="card" style={{ marginBottom: 0 }}>
+                  <div className="card-header"><h2>Identity</h2></div>
+                  <div style={{ display: "grid", gap: 10 }}>
+                    <div className="code-block">ENS: {selectedAgent.ensName}</div>
+                    <div className="code-block">Wallet: {selectedAgent.agentWalletAddress || selectedAgent.walletAddress || "Not available"}</div>
+                    <div className="code-block">Creator: {selectedAgent.creatorAddress || "Not recorded"}</div>
+                    <div className="code-block">Signer/owner: {selectedAgent.ownerAddress || "Not recorded"}</div>
+                    <div className="code-block">Created: {formatDate(selectedAgent.createdAt)}</div>
+                  </div>
+                </div>
+
+                <div className="card" style={{ marginBottom: 0 }}>
+                  <div className="card-header"><h2>Permissions</h2></div>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+                    {(selectedAgent.supportedTokens || []).map((token) => (
+                      <span key={token} className="badge badge-green">{token}</span>
+                    ))}
+                    {(selectedAgent.supportedChains || []).map((chain) => (
+                      <span key={chain} className="badge badge-blue">{chain}</span>
+                    ))}
+                  </div>
+                  <div style={{ display: "grid", gap: 10 }}>
+                    <div className="code-block">Policy URI: {selectedAgent.policyUri || "Not available"}</div>
+                    <div className="code-block">Registration tx: {selectedAgent.registrationTxHash || selectedAgent.registrationTx || "Not available"}</div>
+                  </div>
+                </div>
+              </div>
+
+              {selectedAgentOwned ? (
+                <div className="card" style={{ marginTop: 20, marginBottom: 0 }}>
+                  <div className="card-header">
+                    <div>
+                      <h2>ENS profile media</h2>
+                      <p>Upload an avatar and a header image. These are written to the ENS `avatar` and `header` text records.</p>
+                    </div>
+                  </div>
+
+                  <div className="grid-2">
+                    <div>
+                      <label className="form-label">Avatar image</label>
+                      <input type="file" accept="image/*" onChange={handleAvatarChange} />
+                      <div style={{ marginTop: 16 }}>
+                        {avatarPreview || selectedAgent.avatarUri ? (
+                          <img
+                            src={avatarPreview || selectedAgent.avatarUri}
+                            alt="Avatar preview"
+                            style={{
+                              width: 140,
+                              height: 140,
+                              borderRadius: "50%",
+                              objectFit: "cover",
+                              border: "3px solid var(--nb-ink)",
+                              boxShadow: "4px 4px 0 var(--nb-ink)",
+                            }}
+                          />
+                        ) : (
+                          <div className="code-block">No avatar uploaded yet</div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="form-label">Header image</label>
+                      <input type="file" accept="image/*" onChange={handleHeaderChange} />
+                      <div style={{ marginTop: 16 }}>
+                        {headerPreview || selectedAgent.headerUri ? (
+                          <div
+                            style={{
+                              height: 140,
+                              borderRadius: 18,
+                              backgroundImage: `url(${headerPreview || selectedAgent.headerUri})`,
+                              backgroundSize: "cover",
+                              backgroundPosition: "center",
+                              border: "3px solid var(--nb-ink)",
+                              boxShadow: "4px 4px 0 var(--nb-ink)",
+                            }}
+                          />
+                        ) : (
+                          <div className="code-block">No header uploaded yet</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 20 }}>
+                    <button type="button" className="btn btn-primary" onClick={uploadProfile} disabled={uploadingProfile}>
+                      {uploadingProfile ? "Uploading..." : "Upload to ENS profile"}
+                    </button>
+                    {selectedAgent.avatarUri ? (
+                      <a href={selectedAgent.avatarUri} target="_blank" rel="noreferrer" className="btn btn-ghost">
+                        Open avatar
+                      </a>
+                    ) : null}
+                    {selectedAgent.headerUri ? (
+                      <a href={selectedAgent.headerUri} target="_blank" rel="noreferrer" className="btn btn-ghost">
+                        Open header
+                      </a>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );

@@ -9,7 +9,9 @@ import {
   buildAgentMetadataJson,
   pinPolicy,
   setAllENSRecords,
+  setEnsTextRecords,
   ERC8004_ADDRESSES,
+  prepareSelfOwnedEnsTransactions,
 } from "@vcr-protocol/sdk";
 import type {
   AgentMetadata,
@@ -26,8 +28,9 @@ import {
   startAgentCreationJob,
 } from "../lib/agentCreationJobs.js";
 import { saveAgent, getAgentByChainId, getAgentsByOwner } from "../models/Agent.js";
-import { getAddress } from "viem";
+import { getAddress, recoverMessageAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
+import { getAllAgents, updateAgentProfile } from "../models/Agent.js";
 
 const router = Router();
 
@@ -74,14 +77,6 @@ function isSimpleCreateAgentPayload(body: unknown): body is CreateAgentConfig {
 
 function isManagedDomain(baseDomain: string): boolean {
   return MANAGED_DOMAINS.includes(baseDomain as (typeof MANAGED_DOMAINS)[number]);
-}
-
-function getSelfOwnedUnsupportedMessage(baseDomain: string): string {
-  return [
-    `Self-owned ENS domains are not fully automated in this release.`,
-    `Use your connected wallet to register or manage ${baseDomain} in ENS App,`,
-    `then either switch to ${MANAGED_DOMAINS[0]} for one-click creation or wait for delegated signing support.`,
-  ].join(" ");
 }
 
 function normalizeSimpleCreateConfig(body: SimpleCreateAgentRequest): NormalizedSimpleCreateRequest {
@@ -182,6 +177,95 @@ function getRegistrationRuntimeEnv() {
   };
 }
 
+function buildPinataGatewayUrl(cid: string): string {
+  const gateway = process.env.PINATA_GATEWAY;
+  if (!gateway) {
+    throw new Error("PINATA_GATEWAY must be configured");
+  }
+
+  return `https://${gateway.replace(/^https?:\/\//i, "").replace(/\/+$/g, "")}/ipfs/${cid}`;
+}
+
+function buildProfileUpdateMessage(agentId: number, ensName: string, issuedAt: string): string {
+  return [
+    "VCR ENS profile update",
+    `Agent ID: ${agentId}`,
+    `ENS: ${ensName}`,
+    `Issued At: ${issuedAt}`,
+  ].join("\n");
+}
+
+function buildSelfOwnedEnsSetupMessage(agentId: number, ensName: string, issuedAt: string): string {
+  return [
+    "VCR self-owned ENS setup",
+    `Agent ID: ${agentId}`,
+    `ENS: ${ensName}`,
+    `Issued At: ${issuedAt}`,
+  ].join("\n");
+}
+
+function guessExtensionFromMimeType(mimeType: string): string {
+  const mimeToExtension: Record<string, string> = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/webp": "webp",
+    "image/gif": "gif",
+    "image/svg+xml": "svg",
+  };
+
+  return mimeToExtension[mimeType] ?? "bin";
+}
+
+function parseImageDataUrl(
+  value: string,
+  fallbackName: string,
+): { mimeType: string; file: File } {
+  const match = value.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+  if (!match?.[1] || !match[2]) {
+    throw new Error("Image uploads must be provided as base64 data URLs");
+  }
+
+  const mimeType = match[1];
+  const bytes = Buffer.from(match[2], "base64");
+  if (bytes.length === 0) {
+    throw new Error("Uploaded image was empty");
+  }
+  if (bytes.length > 5 * 1024 * 1024) {
+    throw new Error("Each ENS profile image must be 5 MB or smaller");
+  }
+
+  const extension = guessExtensionFromMimeType(mimeType);
+  const file = new File([bytes], `${fallbackName}.${extension}`, { type: mimeType });
+  return { mimeType, file };
+}
+
+async function uploadProfileAsset(dataUrl: string, fallbackName: string) {
+  const pinata = new PinataSDK({
+    pinataJwt: process.env.PINATA_JWT!,
+    pinataGateway: process.env.PINATA_GATEWAY!,
+  });
+  const { file } = parseImageDataUrl(dataUrl, fallbackName);
+  const result = await pinata.upload.public.file(file);
+
+  return {
+    cid: result.cid,
+    ipfsUri: `ipfs://${result.cid}`,
+    gatewayUrl: buildPinataGatewayUrl(result.cid),
+  };
+}
+
+function isAuthorizedAgentActor(agent: {
+  ownerAddress?: string;
+  creatorAddress?: string;
+}, actorAddress: string): boolean {
+  const normalized = actorAddress.toLowerCase();
+  return (
+    agent.ownerAddress?.toLowerCase() === normalized ||
+    agent.creatorAddress?.toLowerCase() === normalized
+  );
+}
+
 function getSigningAccount() {
   return privateKeyToAccount(process.env.PRIVATE_KEY as `0x${string}`);
 }
@@ -209,7 +293,7 @@ function buildSuccessPayload(config: NormalizedSimpleCreateRequest, record: any)
     links: {
       ensApp: `https://app.ens.domains/name/${record.ensName}`,
       registrationTx: `https://sepolia.etherscan.io/tx/${record.registrationTx}`,
-      ensTx: `https://sepolia.etherscan.io/tx/${record.ensTx}`,
+      ensTx: record.ensTx ? `https://sepolia.etherscan.io/tx/${record.ensTx}` : undefined,
       ipfs: record.policyGatewayUrl ?? record.policyUri,
       policyUri: record.policyUri,
     },
@@ -264,6 +348,7 @@ async function runAgentCreationJob(
       getRegistrationRuntimeEnv(),
       {
         logger: (message) => appendAgentCreationJobLog(jobId, message),
+        skipEnsBinding: config.domainMode === "self-owned",
       },
     );
 
@@ -300,11 +385,11 @@ router.get("/readiness", (_req, res) => {
       {
         id: "self-owned",
         label: "Self-owned ENS",
-        description: "Connect your wallet and pay ENS gas yourself. Registration handoff only in this release.",
+        description: "Connect your wallet, let the backend create the agent, then finish ENS writes from the same wallet in the browser.",
       },
     ],
     ensAppUrl: "https://app.ens.domains",
-    supportsSelfOwnedDomainAutomation: false,
+    supportsSelfOwnedDomainAutomation: true,
     signingAddress,
     sdkReferences: [
       "sdk/src/createAgent.ts",
@@ -327,13 +412,6 @@ router.post("/jobs", async (req, res) => {
     }
 
     const config = normalizeSimpleCreateConfig(req.body as SimpleCreateAgentRequest);
-    if (config.domainMode === "self-owned") {
-      return res.status(409).json({
-        error: getSelfOwnedUnsupportedMessage(config.baseDomain),
-        domainMode: config.domainMode,
-        ensAppUrl: "https://app.ens.domains",
-      });
-    }
     const job = createAgentCreationJob();
     void runAgentCreationJob(job.id, config);
 
@@ -353,6 +431,24 @@ router.get("/jobs/:jobId", (req, res) => {
   }
 
   return res.json(job);
+});
+
+router.get("/", async (_req, res) => {
+  try {
+    const agents = await getAllAgents();
+    return res.json({ agents });
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+router.get("/list", async (_req, res) => {
+  try {
+    const agents = await getAllAgents();
+    return res.json({ agents });
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message });
+  }
 });
 
 /**
@@ -376,14 +472,9 @@ router.post("/", async (req, res) => {
       }
 
       const config = normalizeSimpleCreateConfig(req.body as SimpleCreateAgentRequest);
-      if (config.domainMode === "self-owned") {
-        return res.status(409).json({
-          error: getSelfOwnedUnsupportedMessage(config.baseDomain),
-          domainMode: config.domainMode,
-          ensAppUrl: "https://app.ens.domains",
-        });
-      }
-      const record = await createSdkAgent(config, getRegistrationRuntimeEnv());
+      const record = await createSdkAgent(config, getRegistrationRuntimeEnv(), {
+        skipEnsBinding: config.domainMode === "self-owned",
+      });
       await persistCreatedAgent(config, record);
 
       return res.status(201).json({
@@ -500,6 +591,275 @@ router.get("/owner/:address", async (req, res) => {
   try {
     const agents = await getAgentsByOwner(req.params.address);
     return res.json({ owner: req.params.address, agents });
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+router.post("/:agentId/self-owned/prepare", async (req, res) => {
+  try {
+    const agentId = parseInt(req.params.agentId, 10);
+    if (Number.isNaN(agentId)) {
+      return res.status(400).json({ error: "Invalid agentId" });
+    }
+
+    const agent = await getAgentByChainId(agentId);
+    if (!agent || !agent.ensName || !agent.policyUri) {
+      return res.status(404).json({ error: "Agent not found or missing ENS/policy metadata" });
+    }
+    if (agent.registrationMode !== "self-owned") {
+      return res.status(400).json({ error: "This agent does not use self-owned ENS mode" });
+    }
+
+    const {
+      actorAddress,
+      signature,
+      issuedAt,
+      avatarDataUrl,
+      headerDataUrl,
+    } = req.body as {
+      actorAddress?: string;
+      signature?: `0x${string}`;
+      issuedAt?: string;
+      avatarDataUrl?: string;
+      headerDataUrl?: string;
+    };
+
+    if (!actorAddress || !signature || !issuedAt) {
+      return res.status(400).json({ error: "actorAddress, signature, and issuedAt are required" });
+    }
+
+    const normalizedActor = getAddress(actorAddress);
+    const issuedAtDate = new Date(issuedAt);
+    if (Number.isNaN(issuedAtDate.getTime())) {
+      return res.status(400).json({ error: "issuedAt must be a valid ISO timestamp" });
+    }
+    if (Math.abs(Date.now() - issuedAtDate.getTime()) > 10 * 60 * 1000) {
+      return res.status(400).json({ error: "Self-owned ENS setup signature has expired. Please try again." });
+    }
+
+    const recoveredAddress = await recoverMessageAddress({
+      message: buildSelfOwnedEnsSetupMessage(agentId, agent.ensName, issuedAt),
+      signature,
+    });
+
+    if (recoveredAddress.toLowerCase() !== normalizedActor.toLowerCase()) {
+      return res.status(403).json({ error: "Signature did not match the connected wallet" });
+    }
+
+    if (!isAuthorizedAgentActor(agent, normalizedActor)) {
+      return res.status(403).json({ error: "Connected wallet is not allowed to configure this agent" });
+    }
+
+    const uploaded: Record<string, string> = {};
+    const uploadedIpfs: Record<string, string> = {};
+
+    if (avatarDataUrl) {
+      const avatar = await uploadProfileAsset(avatarDataUrl, `${agent.ensName}-avatar`);
+      uploaded.avatar = avatar.gatewayUrl;
+      uploadedIpfs.avatar = avatar.ipfsUri;
+    }
+
+    if (headerDataUrl) {
+      const header = await uploadProfileAsset(headerDataUrl, `${agent.ensName}-header`);
+      uploaded.header = header.gatewayUrl;
+      uploadedIpfs.header = header.ipfsUri;
+    }
+
+    const prepared = await prepareSelfOwnedEnsTransactions({
+      ensName: agent.ensName,
+      ownerAddress: normalizedActor,
+      agentId,
+      policyUriOrCid: agent.policyUri,
+      textRecords: uploaded,
+    });
+
+    return res.json({
+      success: true,
+      agentId,
+      ensName: agent.ensName,
+      actorAddress: normalizedActor,
+      policyUri: agent.policyUri,
+      profile: {
+        avatar: uploaded.avatar,
+        header: uploaded.header,
+        avatarIpfsUri: uploadedIpfs.avatar,
+        headerIpfsUri: uploadedIpfs.header,
+      },
+      ensSetup: prepared,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+router.post("/:agentId/self-owned/complete", async (req, res) => {
+  try {
+    const agentId = parseInt(req.params.agentId, 10);
+    if (Number.isNaN(agentId)) {
+      return res.status(400).json({ error: "Invalid agentId" });
+    }
+
+    const agent = await getAgentByChainId(agentId);
+    if (!agent || !agent.ensName) {
+      return res.status(404).json({ error: "Agent not found or ENS name missing" });
+    }
+
+    const {
+      actorAddress,
+      signature,
+      issuedAt,
+      ensTxHash,
+      avatarUri,
+      headerUri,
+    } = req.body as {
+      actorAddress?: string;
+      signature?: `0x${string}`;
+      issuedAt?: string;
+      ensTxHash?: string;
+      avatarUri?: string;
+      headerUri?: string;
+    };
+
+    if (!actorAddress || !signature || !issuedAt || !ensTxHash) {
+      return res.status(400).json({ error: "actorAddress, signature, issuedAt, and ensTxHash are required" });
+    }
+
+    const normalizedActor = getAddress(actorAddress);
+    const issuedAtDate = new Date(issuedAt);
+    if (Number.isNaN(issuedAtDate.getTime())) {
+      return res.status(400).json({ error: "issuedAt must be a valid ISO timestamp" });
+    }
+    if (Math.abs(Date.now() - issuedAtDate.getTime()) > 30 * 60 * 1000) {
+      return res.status(400).json({ error: "Self-owned ENS completion signature has expired. Please retry the setup." });
+    }
+
+    const recoveredAddress = await recoverMessageAddress({
+      message: buildSelfOwnedEnsSetupMessage(agentId, agent.ensName, issuedAt),
+      signature,
+    });
+
+    if (recoveredAddress.toLowerCase() !== normalizedActor.toLowerCase()) {
+      return res.status(403).json({ error: "Signature did not match the connected wallet" });
+    }
+
+    if (!isAuthorizedAgentActor(agent, normalizedActor)) {
+      return res.status(403).json({ error: "Connected wallet is not allowed to configure this agent" });
+    }
+
+    const updated = await updateAgentProfile(agentId, {
+      avatarUri,
+      headerUri,
+    });
+
+    return res.json({
+      success: true,
+      agentId,
+      ensName: agent.ensName,
+      ensTxHash,
+      ensTxUrl: `https://sepolia.etherscan.io/tx/${ensTxHash}`,
+      profile: {
+        avatar: avatarUri,
+        header: headerUri,
+      },
+      agent: updated ?? agent,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+router.put("/:agentId/profile", async (req, res) => {
+  try {
+    const agentId = parseInt(req.params.agentId, 10);
+    if (Number.isNaN(agentId)) {
+      return res.status(400).json({ error: "Invalid agentId" });
+    }
+
+    const agent = await getAgentByChainId(agentId);
+    if (!agent || !agent.ensName) {
+      return res.status(404).json({ error: "Agent not found or ENS name missing" });
+    }
+
+    const {
+      avatarDataUrl,
+      headerDataUrl,
+      actorAddress,
+      signature,
+      issuedAt,
+    } = req.body as {
+      avatarDataUrl?: string;
+      headerDataUrl?: string;
+      actorAddress?: string;
+      signature?: `0x${string}`;
+      issuedAt?: string;
+    };
+
+    if (!avatarDataUrl && !headerDataUrl) {
+      return res.status(400).json({ error: "Provide avatarDataUrl and/or headerDataUrl" });
+    }
+    if (!actorAddress || !signature || !issuedAt) {
+      return res.status(400).json({ error: "actorAddress, signature, and issuedAt are required" });
+    }
+
+    const normalizedActor = getAddress(actorAddress);
+    const issuedAtDate = new Date(issuedAt);
+    if (Number.isNaN(issuedAtDate.getTime())) {
+      return res.status(400).json({ error: "issuedAt must be a valid ISO timestamp" });
+    }
+    if (Math.abs(Date.now() - issuedAtDate.getTime()) > 10 * 60 * 1000) {
+      return res.status(400).json({ error: "Profile update signature has expired. Please try again." });
+    }
+
+    const recoveredAddress = await recoverMessageAddress({
+      message: buildProfileUpdateMessage(agentId, agent.ensName, issuedAt),
+      signature,
+    });
+
+    if (recoveredAddress.toLowerCase() !== normalizedActor.toLowerCase()) {
+      return res.status(403).json({ error: "Signature did not match the connected wallet" });
+    }
+
+    if (!isAuthorizedAgentActor(agent, normalizedActor)) {
+      return res.status(403).json({ error: "Connected wallet is not allowed to update this agent profile" });
+    }
+
+    const uploaded: Record<string, string> = {};
+    const profileAssets: Record<string, string> = {};
+    const uploadedIpfs: Record<string, string> = {};
+
+    if (avatarDataUrl) {
+      const avatar = await uploadProfileAsset(avatarDataUrl, `${agent.ensName}-avatar`);
+      uploaded.avatar = avatar.gatewayUrl;
+      profileAssets.avatarUri = avatar.gatewayUrl;
+      uploadedIpfs.avatar = avatar.ipfsUri;
+    }
+
+    if (headerDataUrl) {
+      const header = await uploadProfileAsset(headerDataUrl, `${agent.ensName}-header`);
+      uploaded.header = header.gatewayUrl;
+      profileAssets.headerUri = header.gatewayUrl;
+      uploadedIpfs.header = header.ipfsUri;
+    }
+
+    const ensResult = await setEnsTextRecords(agent.ensName, uploaded);
+    const updated = await updateAgentProfile(agentId, profileAssets);
+
+    return res.json({
+      success: true,
+      agentId,
+      ensName: agent.ensName,
+      txHash: ensResult.txHash,
+      profile: {
+        avatar: uploaded.avatar,
+        header: uploaded.header,
+        avatarUri: profileAssets.avatarUri,
+        headerUri: profileAssets.headerUri,
+        avatarIpfsUri: uploadedIpfs.avatar,
+        headerIpfsUri: uploadedIpfs.header,
+      },
+      agent: updated ?? agent,
+    });
   } catch (err) {
     return res.status(500).json({ error: (err as Error).message });
   }
