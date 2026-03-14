@@ -420,7 +420,7 @@ function buildSuccessPayload(config: NormalizedSimpleCreateRequest, record: any)
           : "Self-owned domain: your connected wallet pays ENS registration and write gas.",
     },
     links: {
-      ensApp: `https://app.ens.domains/name/${record.ensName}`,
+      ensApp: `https://sepolia.app.ens.domains/${record.ensName}`,
       registrationTx: `https://sepolia.etherscan.io/tx/${record.registrationTx}`,
       ensTx: record.ensTx ? `https://sepolia.etherscan.io/tx/${record.ensTx}` : undefined,
       ipfs: record.policyGatewayUrl ?? record.policyUri,
@@ -541,7 +541,7 @@ router.get("/readiness", (_req, res) => {
         description: "Connect your wallet, let the backend create the agent, then finish ENS writes from the same wallet in the browser.",
       },
     ],
-    ensAppUrl: "https://app.ens.domains",
+    ensAppUrl: "https://sepolia.app.ens.domains/",
     supportsSelfOwnedDomainAutomation: true,
     signingAddress,
     sdkReferences: [
