@@ -324,6 +324,229 @@ export async function setAllENSRecords(
   return { txHash };
 }
 
+/**
+ * Set one or more ENS text records in a single multicall transaction.
+ * Useful for profile records like avatar/header or additional app metadata.
+ */
+export async function setEnsTextRecords(
+  ensName: string,
+  records: Record<string, string>,
+  logger?: (message: string) => void,
+): Promise<{ txHash: string; records: Record<string, string> }> {
+  const entries = Object.entries(records).filter(([, value]) => value.trim().length > 0);
+  if (entries.length === 0) {
+    throw new Error("At least one ENS text record is required");
+  }
+
+  const walletClient = getEOAWalletClient();
+  const publicClient = getPublicClient();
+  logEns(`Preparing ${entries.length} text record(s) for ${ensName}`, logger);
+  await ensureSubdomainExists(ensName, logger);
+
+  const node = namehash(normalize(ensName));
+  const resolver = ENS_ADDRESSES.publicResolverSepolia;
+  const multicallData = entries.map(([key, value]) => {
+    logEns(`Text record ${key}: ${value}`, logger);
+    return encodeFunctionData({
+      abi: resolverAbi,
+      functionName: "setText",
+      args: [node, key, value],
+    });
+  });
+
+  logEns("Submitting ENS text record multicall...", logger);
+  const txHash = await withEnsProgressLog(
+    "Waiting for ENS text record transaction hash",
+    walletClient.writeContract({
+      address: resolver,
+      abi: resolverAbi,
+      functionName: "multicall",
+      args: [multicallData],
+    }),
+    logger,
+  );
+  logEns(`ENS text record tx submitted: ${txHash}`, logger);
+  await withEnsProgressLog(
+    "Still waiting for ENS text record receipt",
+    publicClient.waitForTransactionReceipt({ hash: txHash }),
+    logger,
+  );
+  logEns(`ENS text records confirmed for ${ensName}`, logger);
+
+  return { txHash, records: Object.fromEntries(entries) };
+}
+
+export async function prepareSelfOwnedEnsTransactions(params: {
+  ensName: string;
+  ownerAddress: `0x${string}`;
+  agentId: number;
+  policyUriOrCid: string;
+  registryAddress?: string;
+  chainId?: number;
+  textRecords?: Record<string, string>;
+}): Promise<{
+  ensName: string;
+  transactions: Array<{
+    label: string;
+    to: `0x${string}`;
+    data: `0x${string}`;
+    value: `0x${string}`;
+  }>;
+  gatewayUrl: string;
+  ipfsUri: string;
+}> {
+  const {
+    ensName,
+    ownerAddress,
+    agentId,
+    policyUriOrCid,
+    registryAddress = ERC8004_REGISTRY_SEPOLIA,
+    chainId = 11155111,
+    textRecords = {},
+  } = params;
+
+  const publicClient = getPublicClient();
+  const resolver = ENS_ADDRESSES.publicResolverSepolia;
+  const normalizedEnsName = normalize(ensName);
+  const node = namehash(normalizedEnsName);
+  const labels = ensName.split(".");
+
+  if (labels.length < 3) {
+    throw new Error(`ENS name "${ensName}" must have at least 3 labels (e.g. agent.acmecorp.eth)`);
+  }
+
+  const sublabel = labels[0]!;
+  const parentDomain = labels.slice(1).join(".");
+  const parentNode = namehash(normalize(parentDomain)) as `0x${string}`;
+  const subnodeHash = computeSubnodeHash(parentNode, sublabel);
+  const transactions: Array<{
+    label: string;
+    to: `0x${string}`;
+    data: `0x${string}`;
+    value: `0x${string}`;
+  }> = [];
+
+  const subnodeOwner = await publicClient.readContract({
+    address: ENS_ADDRESSES.registry,
+    abi: ensRegistryAbi,
+    functionName: "owner",
+    args: [subnodeHash],
+  }) as `0x${string}`;
+
+  if (subnodeOwner === "0x0000000000000000000000000000000000000000") {
+    const parentRegistryOwner = await publicClient.readContract({
+      address: ENS_ADDRESSES.registry,
+      abi: ensRegistryAbi,
+      functionName: "owner",
+      args: [parentNode],
+    }) as `0x${string}`;
+
+    if (parentRegistryOwner === "0x0000000000000000000000000000000000000000") {
+      throw new Error(`Parent domain "${parentDomain}" is not registered on Sepolia`);
+    }
+
+    const parentIsWrapped =
+      parentRegistryOwner.toLowerCase() === NAME_WRAPPER_SEPOLIA.toLowerCase();
+
+    if (!parentIsWrapped && parentRegistryOwner.toLowerCase() !== ownerAddress.toLowerCase()) {
+      throw new Error(`Connected wallet does not own the parent domain "${parentDomain}"`);
+    }
+
+    if (parentIsWrapped) {
+      const [wrappedOwner, , expiry] = await publicClient.readContract({
+        address: NAME_WRAPPER_SEPOLIA,
+        abi: nameWrapperAbi,
+        functionName: "getData",
+        args: [BigInt(parentNode)],
+      }) as [`0x${string}`, number, bigint];
+
+      if (wrappedOwner.toLowerCase() !== ownerAddress.toLowerCase()) {
+        throw new Error(`Connected wallet does not own the wrapped parent domain "${parentDomain}"`);
+      }
+
+      const expiryTimestamp =
+        expiry > 0n
+          ? expiry
+          : BigInt(Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60);
+
+      transactions.push({
+        label: `Create self-owned subdomain ${ensName}`,
+        to: NAME_WRAPPER_SEPOLIA,
+        data: encodeFunctionData({
+          abi: nameWrapperAbi,
+          functionName: "setSubnodeRecord",
+          args: [parentNode, sublabel, ownerAddress, resolver, 0n, 0, expiryTimestamp],
+        }),
+        value: "0x0",
+      });
+    } else {
+      transactions.push({
+        label: `Create self-owned subdomain ${ensName}`,
+        to: ENS_ADDRESSES.registry,
+        data: encodeFunctionData({
+          abi: ensRegistryAbi,
+          functionName: "setSubnodeRecord",
+          args: [parentNode, labelhash(sublabel) as `0x${string}`, ownerAddress, resolver, 0n],
+        }),
+        value: "0x0",
+      });
+    }
+  } else if (
+    subnodeOwner.toLowerCase() !== ownerAddress.toLowerCase() &&
+    subnodeOwner.toLowerCase() !== NAME_WRAPPER_SEPOLIA.toLowerCase()
+  ) {
+    throw new Error(`Connected wallet is not authorized to manage the existing subdomain "${ensName}"`);
+  }
+
+  const agentKey = buildAgentRegistrationKey(registryAddress, chainId, agentId);
+  const gatewayUrl = buildPolicyGatewayUrl(policyUriOrCid);
+  const ipfsUri = normalizeIpfsUri(policyUriOrCid);
+  const resolverCalls = [
+    encodeFunctionData({
+      abi: resolverAbi,
+      functionName: "setText",
+      args: [node, agentKey, "1"],
+    }),
+    encodeFunctionData({
+      abi: resolverAbi,
+      functionName: "setContenthash",
+      args: [node, encodeIpfsContenthash(policyUriOrCid)],
+    }),
+    encodeFunctionData({
+      abi: resolverAbi,
+      functionName: "setText",
+      args: [node, "vcr.policy", gatewayUrl],
+    }),
+    ...Object.entries(textRecords)
+      .filter(([, value]) => value.trim().length > 0)
+      .map(([key, value]) =>
+        encodeFunctionData({
+          abi: resolverAbi,
+          functionName: "setText",
+          args: [node, key, value],
+        }),
+      ),
+  ];
+
+  transactions.push({
+    label: `Bind ENSIP-25 and VCR policy records for ${ensName}`,
+    to: resolver,
+    data: encodeFunctionData({
+      abi: resolverAbi,
+      functionName: "multicall",
+      args: [resolverCalls],
+    }),
+    value: "0x0",
+  });
+
+  return {
+    ensName,
+    transactions,
+    gatewayUrl,
+    ipfsUri,
+  };
+}
+
 
 // ─── Subdomain helpers ────────────────────────────────────────────────────────
 
@@ -521,6 +744,28 @@ export async function getLegacyVCRPolicyText(ensName: string): Promise<string | 
     name: normalize(ensName),
     key: "vcr.policy",
   });
+}
+
+export async function getEnsTextRecord(
+  ensName: string,
+  key: string,
+): Promise<string | null> {
+  const publicClient = getPublicClient();
+  return publicClient.getEnsText({
+    name: normalize(ensName),
+    key,
+  });
+}
+
+export async function getEnsProfileRecords(
+  ensName: string,
+): Promise<{ avatar: string | null; header: string | null }> {
+  const [avatar, header] = await Promise.all([
+    getEnsTextRecord(ensName, "avatar"),
+    getEnsTextRecord(ensName, "header"),
+  ]);
+
+  return { avatar, header };
 }
 
 /**

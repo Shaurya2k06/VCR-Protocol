@@ -4,6 +4,8 @@ import {
   vcrPaymentMiddleware,
   X402_FACILITATOR,
   canAgentSpend,
+  getVCRPolicyUri,
+  fetchPolicy,
 } from "@vcr-protocol/sdk";
 import { getDailySpent, recordSpend } from "../models/DailySpend.js";
 import {
@@ -11,6 +13,7 @@ import {
   getTransactionsByAgent,
 } from "../models/Transaction.js";
 import type { SpendRequest } from "@vcr-protocol/sdk";
+import { buildProtocolSuite } from "../lib/protocolSuite.js";
 
 const router = Router();
 
@@ -228,6 +231,122 @@ router.get("/logs/:ensName", async (req, res) => {
     const { ensName } = req.params;
     const logs = await getTransactionsByAgent(ensName);
     return res.json({ ensName, logs });
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+/**
+ * POST /api/demo/suite/:ensName
+ * Run an automated x402 + VCR scenario suite against the live ENS-resolved policy.
+ * By default this is a dry run. Set commitSuccess=true to persist the allowed micropayment.
+ */
+router.post("/suite/:ensName", async (req, res) => {
+  try {
+    const ensName = req.params.ensName;
+    const commitSuccess = Boolean(req.body?.commitSuccess);
+    const policyUri = await getVCRPolicyUri(ensName);
+
+    if (!policyUri) {
+      return res.status(404).json({
+        error: "No VCR policy pointer found for this ENS name",
+        ensName,
+      });
+    }
+
+    const policy = await fetchPolicy(policyUri);
+    const currentDailySpent = await getDailySpent(
+      ensName,
+      policy.constraints.allowedTokens[0] ?? PAYWALL_TOKEN,
+    );
+
+    const suite = buildProtocolSuite(
+      ensName,
+      policy,
+      currentDailySpent,
+      {
+        amount: PAYWALL_AMOUNT,
+        token: PAYWALL_TOKEN,
+        recipient: PAYWALL_RECIPIENT,
+        network: PAYWALL_NETWORK,
+      },
+    );
+
+    let committedResult: {
+      amount: string;
+      token: string;
+      recipient: string;
+      chain: string;
+      dailySpent: string;
+    } | null = null;
+
+    const allowedScenario = suite.scenarios.find((scenario) => scenario.id === "allowed-micropayment");
+    if (commitSuccess && allowedScenario?.actualAllowed) {
+      const record = await recordSpend(
+        ensName,
+        allowedScenario.request.token,
+        allowedScenario.request.amount,
+      );
+
+      await logTransaction({
+        ensName,
+        type: "x402_payment",
+        amount: allowedScenario.request.amount,
+        token: allowedScenario.request.token,
+        recipient: allowedScenario.request.recipient,
+        chain: allowedScenario.request.chain,
+        vcrAllowed: true,
+        status: "completed",
+        policyCid: policy.ipfs_cid,
+      });
+
+      committedResult = {
+        amount: allowedScenario.request.amount,
+        token: allowedScenario.request.token,
+        recipient: allowedScenario.request.recipient,
+        chain: allowedScenario.request.chain,
+        dailySpent: record.amountSpent,
+      };
+    }
+
+    for (const scenario of suite.scenarios) {
+      if (scenario.id === "allowed-micropayment" && commitSuccess && committedResult) {
+        continue;
+      }
+
+      await logTransaction({
+        ensName,
+        type: scenario.actualAllowed ? "x402_payment" : "policy_violation",
+        amount: scenario.request.amount,
+        token: scenario.request.token,
+        recipient: scenario.request.recipient,
+        chain: scenario.request.chain,
+        vcrAllowed: scenario.actualAllowed,
+        vcrReason: scenario.reason,
+        status: scenario.actualAllowed
+          ? scenario.id === "allowed-micropayment" && commitSuccess
+            ? "completed"
+            : "pending"
+          : "rejected",
+        policyCid: policy.ipfs_cid,
+      });
+    }
+
+    return res.json({
+      success: true,
+      ensName,
+      policyUri,
+      suite,
+      commitSuccess,
+      committedResult,
+      paywall: {
+        amount: PAYWALL_AMOUNT,
+        token: PAYWALL_TOKEN,
+        recipient: PAYWALL_RECIPIENT,
+        network: PAYWALL_NETWORK,
+        facilitator: X402_FACILITATOR,
+      },
+    });
   } catch (err) {
     return res.status(500).json({ error: (err as Error).message });
   }

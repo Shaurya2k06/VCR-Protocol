@@ -64,7 +64,7 @@ describe("canAgentSpendWithPolicy", () => {
             "0"
         );
         expect(result.allowed).toBe(false);
-        expect(result.reason).toContain("not whitelisted");
+        expect(result.reason).toContain("not in the whitelist");
     });
 
     it("handles case-insensitive recipient matching", () => {
@@ -83,7 +83,7 @@ describe("canAgentSpendWithPolicy", () => {
             "0"
         );
         expect(result.allowed).toBe(false);
-        expect(result.reason).toContain("Token DAI not allowed");
+        expect(result.reason).toContain("Token DAI is not allowed");
     });
 
     it("allows spend with an allowed token (USDT)", () => {
@@ -102,7 +102,7 @@ describe("canAgentSpendWithPolicy", () => {
             "0"
         );
         expect(result.allowed).toBe(false);
-        expect(result.reason).toContain("Chain ethereum not allowed");
+        expect(result.reason).toContain("Chain ethereum is not allowed");
     });
 
     it("allows spend on allowed chain (base)", () => {
@@ -179,7 +179,7 @@ describe("canAgentSpendWithPolicy — time restrictions", () => {
 
         const result = canAgentSpendWithPolicy(restrictedPolicy, makeRequest(), "0");
         expect(result.allowed).toBe(false);
-        expect(result.reason).toContain("Outside allowed hours");
+        expect(result.reason).toContain("Outside allowed UTC hours");
     });
 });
 

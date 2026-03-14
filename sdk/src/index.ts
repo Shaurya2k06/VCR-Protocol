@@ -112,9 +112,13 @@ export {
   setVCRPolicyRecord,
   setAgentRegistrationRecord,
   setAllENSRecords,
+  setEnsTextRecords,
+  prepareSelfOwnedEnsTransactions,
   getVCRPolicyUri,
   getVCRPolicyContenthashUri,
   getLegacyVCRPolicyText,
+  getEnsTextRecord,
+  getEnsProfileRecords,
   getAgentRegistrationRecord,
   verifyAgentENSLink,
 } from "./ens.js";

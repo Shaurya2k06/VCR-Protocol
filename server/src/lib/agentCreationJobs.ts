@@ -26,7 +26,7 @@ export interface AgentCreationJobResult {
   links: {
     ensApp: string;
     registrationTx: string;
-    ensTx: string;
+    ensTx?: string;
     ipfs: string;
     policyUri: string;
   };
