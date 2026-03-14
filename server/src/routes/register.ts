@@ -48,11 +48,18 @@ type DomainMode = "managed" | "self-owned";
 interface SimpleCreateAgentRequest extends CreateAgentConfig {
   creatorAddress?: string;
   domainMode?: DomainMode;
+  rulesDocumentUrl?: string;
+  rulesDocumentRaw?: string;
 }
 
 interface NormalizedSimpleCreateRequest extends CreateAgentConfig {
   creatorAddress: `0x${string}`;
   domainMode: DomainMode;
+}
+
+interface RulesDocumentOverrides {
+  rulesDocumentUrl?: string;
+  rulesDocumentRaw?: string;
 }
 
 function getMissingSimpleCreateEnv(): string[] {
@@ -170,13 +177,29 @@ function normalizeSimpleCreateConfig(body: SimpleCreateAgentRequest): Normalized
   return config;
 }
 
-<<<<<<< HEAD
+function getRegistrationRuntimeEnv() {
+  return {
+    BITGO_ACCESS_TOKEN: process.env.BITGO_ACCESS_TOKEN!,
+    BITGO_ENTERPRISE_ID: process.env.BITGO_ENTERPRISE_ID!,
+    PINATA_JWT: process.env.PINATA_JWT!,
+    PINATA_GATEWAY: process.env.PINATA_GATEWAY!,
+    PIMLICO_API_KEY: process.env.PIMLICO_API_KEY!,
+    PRIVATE_KEY: process.env.PRIVATE_KEY!,
+    SEPOLIA_RPC_URL: process.env.SEPOLIA_RPC_URL!,
+  };
+}
+
+function getSigningAccount() {
+  return privateKeyToAccount(process.env.PRIVATE_KEY as `0x${string}`);
+}
+
 type RulesDocumentSource = "fileverse" | "ipfs" | "inline";
 
 function toOptionalString(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
+
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
 }
@@ -196,66 +219,69 @@ function getRulesDocumentSource(url?: string, raw?: string): RulesDocumentSource
   return undefined;
 }
 
+function extractIpfsCid(value: unknown): string | undefined {
+  const normalized = toOptionalString(value);
+  if (!normalized) {
+    return undefined;
+  }
+
+  if (normalized.startsWith("ipfs://")) {
+    return normalized.slice("ipfs://".length);
+  }
+
+  try {
+    const parsed = new URL(normalized);
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    const ipfsIndex = segments.findIndex((segment) => segment === "ipfs");
+    if (ipfsIndex >= 0 && segments[ipfsIndex + 1]) {
+      return segments[ipfsIndex + 1];
+    }
+  } catch {
+    // Continue with non-URL fallback.
+  }
+
+  if (!normalized.includes("/") && !normalized.includes(":")) {
+    return normalized;
+  }
+
+  return undefined;
+}
+
+function getPinataGatewayBaseUrl(): string {
+  const configured = toOptionalString(process.env.PINATA_GATEWAY);
+  if (!configured) {
+    return "https://gateway.pinata.cloud";
+  }
+
+  const withProtocol = /^https?:\/\//i.test(configured)
+    ? configured
+    : `https://${configured}`;
+
+  return withProtocol.replace(/\/+$/, "");
+}
+
+function buildPinataGatewayUrl(value: unknown): string | undefined {
+  const cid = extractIpfsCid(value);
+  if (!cid) {
+    return undefined;
+  }
+
+  return `${getPinataGatewayBaseUrl()}/ipfs/${cid}`;
+}
+
 function buildSimpleRulesSnapshot(config: CreateAgentConfig): string {
   return JSON.stringify(
     {
-=======
-function getRegistrationRuntimeEnv() {
-  return {
-    BITGO_ACCESS_TOKEN: process.env.BITGO_ACCESS_TOKEN!,
-    BITGO_ENTERPRISE_ID: process.env.BITGO_ENTERPRISE_ID!,
-    PINATA_JWT: process.env.PINATA_JWT!,
-    PINATA_GATEWAY: process.env.PINATA_GATEWAY!,
-    PIMLICO_API_KEY: process.env.PIMLICO_API_KEY!,
-    PRIVATE_KEY: process.env.PRIVATE_KEY!,
-    SEPOLIA_RPC_URL: process.env.SEPOLIA_RPC_URL!,
-  };
-}
-
-function getSigningAccount() {
-  return privateKeyToAccount(process.env.PRIVATE_KEY as `0x${string}`);
-}
-
-function buildSuccessPayload(config: NormalizedSimpleCreateRequest, record: any) {
-  const signingAccount = getSigningAccount();
-
-  return {
-    record: {
-      ...record,
-      creatorAddress: config.creatorAddress,
-      ownerAddress: signingAccount.address,
-      signingAddress: signingAccount.address,
-      registrationMode: config.domainMode,
-    },
-    ownership: {
-      creatorAddress: config.creatorAddress,
-      signingAddress: signingAccount.address,
-      domainMode: config.domainMode,
-      feeResponsibility:
-        config.domainMode === "managed"
-          ? "Managed domain: the backend signer pays the Sepolia ENS subdomain write gas."
-          : "Self-owned domain: your connected wallet pays ENS registration and write gas.",
-    },
-    links: {
-      ensApp: `https://app.ens.domains/name/${record.ensName}`,
-      registrationTx: `https://sepolia.etherscan.io/tx/${record.registrationTx}`,
-      ensTx: `https://sepolia.etherscan.io/tx/${record.ensTx}`,
-      ipfs: record.policyGatewayUrl ?? record.policyUri,
-      policyUri: record.policyUri,
-    },
-    permissions: {
->>>>>>> 17b622a1415783978ca7541e4f3989b15b751134
       maxPerTxUsdc: config.maxPerTxUsdc,
       dailyLimitUsdc: config.dailyLimitUsdc,
       allowedRecipients: config.allowedRecipients,
       allowedTokens: config.allowedTokens ?? ["USDC"],
       allowedChains: config.allowedChains ?? ["base-sepolia"],
       allowedHours: config.allowedHours,
-<<<<<<< HEAD
       description: config.description,
     },
     null,
-    2
+    2,
   );
 }
 
@@ -289,7 +315,40 @@ function resolveRulesDocumentFields(params: {
   };
 }
 
-=======
+function buildSuccessPayload(config: NormalizedSimpleCreateRequest, record: any) {
+  const signingAccount = getSigningAccount();
+
+  return {
+    record: {
+      ...record,
+      creatorAddress: config.creatorAddress,
+      ownerAddress: signingAccount.address,
+      signingAddress: signingAccount.address,
+      registrationMode: config.domainMode,
+    },
+    ownership: {
+      creatorAddress: config.creatorAddress,
+      signingAddress: signingAccount.address,
+      domainMode: config.domainMode,
+      feeResponsibility:
+        config.domainMode === "managed"
+          ? "Managed domain: the backend signer pays the Sepolia ENS subdomain write gas."
+          : "Self-owned domain: your connected wallet pays ENS registration and write gas.",
+    },
+    links: {
+      ensApp: `https://app.ens.domains/name/${record.ensName}`,
+      registrationTx: `https://sepolia.etherscan.io/tx/${record.registrationTx}`,
+      ensTx: `https://sepolia.etherscan.io/tx/${record.ensTx}`,
+      ipfs: record.policyGatewayUrl ?? record.policyUri,
+      policyUri: record.policyUri,
+    },
+    permissions: {
+      maxPerTxUsdc: config.maxPerTxUsdc,
+      dailyLimitUsdc: config.dailyLimitUsdc,
+      allowedRecipients: config.allowedRecipients,
+      allowedTokens: config.allowedTokens ?? ["USDC"],
+      allowedChains: config.allowedChains ?? ["base-sepolia"],
+      allowedHours: config.allowedHours,
     },
   };
 }
@@ -297,8 +356,19 @@ function resolveRulesDocumentFields(params: {
 async function persistCreatedAgent(
   config: NormalizedSimpleCreateRequest,
   record: any,
+  overrides?: RulesDocumentOverrides,
 ): Promise<void> {
   const ownerAccount = getSigningAccount();
+  const pinataGatewayUrl =
+    buildPinataGatewayUrl(record.policyUri) ??
+    buildPinataGatewayUrl(record.policyGatewayUrl);
+  const rulesDocument = resolveRulesDocumentFields({
+    explicitUrl: overrides?.rulesDocumentUrl,
+    explicitRaw: overrides?.rulesDocumentRaw,
+    fallbackUrl: pinataGatewayUrl ?? record.policyGatewayUrl ?? record.policyUri,
+    fallbackRaw: buildSimpleRulesSnapshot(config),
+  });
+
   await saveAgent({
     agentId: record.agentId,
     name: config.name,
@@ -310,6 +380,9 @@ async function persistCreatedAgent(
     ensName: record.ensName,
     agentUri: record.erc8004AgentUri ?? record.policyUri,
     policyUri: record.policyUri,
+    rulesDocumentUrl: rulesDocument.rulesDocumentUrl,
+    rulesDocumentRaw: rulesDocument.rulesDocumentRaw,
+    rulesDocumentSource: rulesDocument.rulesDocumentSource,
     policyCid: record.policyCid,
     bitgoWalletId: record.walletId,
     registrationTxHash: record.registrationTx,
@@ -322,6 +395,7 @@ async function persistCreatedAgent(
 async function runAgentCreationJob(
   jobId: string,
   config: NormalizedSimpleCreateRequest,
+  rulesDocumentOverrides?: RulesDocumentOverrides,
 ): Promise<void> {
   startAgentCreationJob(jobId);
   appendAgentCreationJobLog(jobId, '[createAgent] Job accepted by API');
@@ -329,15 +403,23 @@ async function runAgentCreationJob(
   appendAgentCreationJobLog(jobId, `  Domain mode: ${config.domainMode}`);
 
   try {
-    const record = await createSdkAgent(
+    const createSdkAgentWithOptionalLogger = createSdkAgent as unknown as (
+      config: CreateAgentConfig,
+      env: ReturnType<typeof getRegistrationRuntimeEnv>,
+      options?: {
+        logger?: (message: string) => void;
+      },
+    ) => Promise<any>;
+
+    const record = await createSdkAgentWithOptionalLogger(
       config,
       getRegistrationRuntimeEnv(),
       {
-        logger: (message) => appendAgentCreationJobLog(jobId, message),
+        logger: (message: string) => appendAgentCreationJobLog(jobId, message),
       },
     );
 
-    await persistCreatedAgent(config, record);
+    await persistCreatedAgent(config, record, rulesDocumentOverrides);
     appendAgentCreationJobLog(jobId, "  Agent record saved in the server database");
 
     completeAgentCreationJob(jobId, buildSuccessPayload(config, record));
@@ -348,7 +430,6 @@ async function runAgentCreationJob(
   }
 }
 
->>>>>>> 17b622a1415783978ca7541e4f3989b15b751134
 router.get("/readiness", (_req, res) => {
   const missing = getMissingSimpleCreateEnv();
   const signingAddress = process.env.PRIVATE_KEY
@@ -397,7 +478,8 @@ router.post("/jobs", async (req, res) => {
       });
     }
 
-    const config = normalizeSimpleCreateConfig(req.body as SimpleCreateAgentRequest);
+    const requestBody = req.body as SimpleCreateAgentRequest;
+    const config = normalizeSimpleCreateConfig(requestBody);
     if (config.domainMode === "self-owned") {
       return res.status(409).json({
         error: getSelfOwnedUnsupportedMessage(config.baseDomain),
@@ -405,8 +487,14 @@ router.post("/jobs", async (req, res) => {
         ensAppUrl: "https://app.ens.domains",
       });
     }
+
+    const rulesDocumentOverrides: RulesDocumentOverrides = {
+      rulesDocumentUrl: toOptionalString(requestBody.rulesDocumentUrl),
+      rulesDocumentRaw: toOptionalString(requestBody.rulesDocumentRaw),
+    };
+
     const job = createAgentCreationJob();
-    void runAgentCreationJob(job.id, config);
+    void runAgentCreationJob(job.id, config, rulesDocumentOverrides);
 
     return res.status(202).json({
       jobId: job.id,
@@ -450,62 +538,6 @@ router.post("/", async (req, res) => {
         });
       }
 
-<<<<<<< HEAD
-      const config = normalizeSimpleCreateConfig(body);
-      const record = await createSdkAgent(config, {
-        BITGO_ACCESS_TOKEN: process.env.BITGO_ACCESS_TOKEN!,
-        BITGO_ENTERPRISE_ID: process.env.BITGO_ENTERPRISE_ID!,
-        PINATA_JWT: process.env.PINATA_JWT!,
-        PINATA_GATEWAY: process.env.PINATA_GATEWAY!,
-        PIMLICO_API_KEY: process.env.PIMLICO_API_KEY!,
-        PRIVATE_KEY: process.env.PRIVATE_KEY!,
-        SEPOLIA_RPC_URL: process.env.SEPOLIA_RPC_URL!,
-      });
-
-      const recordWithOptionalDocFields = record as typeof record & {
-        policyGatewayUrl?: string;
-      };
-
-      const rulesDocument = resolveRulesDocumentFields({
-        explicitUrl: body.rulesDocumentUrl,
-        explicitRaw: body.rulesDocumentRaw,
-        fallbackUrl: recordWithOptionalDocFields.policyGatewayUrl ?? record.policyUri,
-        fallbackRaw: buildSimpleRulesSnapshot(config),
-      });
-
-      const ownerAccount = privateKeyToAccount(process.env.PRIVATE_KEY as `0x${string}`);
-      await saveAgent({
-        agentId: record.agentId,
-        name: config.name,
-        description: config.description,
-        ownerAddress: ownerAccount.address,
-        agentWalletAddress: record.walletAddress,
-        ensName: record.ensName,
-        agentUri: record.erc8004AgentUri ?? record.policyUri,
-        policyUri: record.policyUri,
-        rulesDocumentUrl: rulesDocument.rulesDocumentUrl,
-        rulesDocumentRaw: rulesDocument.rulesDocumentRaw,
-        rulesDocumentSource: rulesDocument.rulesDocumentSource,
-        policyCid: record.policyCid,
-        bitgoWalletId: record.walletId,
-        registrationTxHash: record.registrationTx,
-        active: true,
-        supportedChains: config.allowedChains ?? ["base-sepolia"],
-        supportedTokens: config.allowedTokens ?? ["USDC"],
-      } as any);
-
-      return res.status(201).json({
-        mode: "sdk-create-agent",
-        record,
-        rulesDocument,
-        sdkReferences: [
-          "sdk/src/createAgent.ts",
-          "sdk/src/types.ts",
-          "sdk/src/bitgo.ts",
-          "sdk/src/fileverse.ts",
-          "sdk/src/ens.ts",
-        ],
-=======
       const config = normalizeSimpleCreateConfig(req.body as SimpleCreateAgentRequest);
       if (config.domainMode === "self-owned") {
         return res.status(409).json({
@@ -515,12 +547,14 @@ router.post("/", async (req, res) => {
         });
       }
       const record = await createSdkAgent(config, getRegistrationRuntimeEnv());
-      await persistCreatedAgent(config, record);
+      await persistCreatedAgent(config, record, {
+        rulesDocumentUrl: toOptionalString(body.rulesDocumentUrl),
+        rulesDocumentRaw: toOptionalString(body.rulesDocumentRaw),
+      });
 
       return res.status(201).json({
         mode: "sdk-create-agent",
         ...buildSuccessPayload(config, record),
->>>>>>> 17b622a1415783978ca7541e4f3989b15b751134
       });
     }
 
@@ -605,10 +639,20 @@ router.post("/", async (req, res) => {
       }
     }
 
+    if (policy && !response.policyUri) {
+      const policyPin = await pinPolicy(policy);
+      response.policyCid = policyPin.cid;
+      response.policyUri = policyPin.ipfsUri;
+    }
+
+    const pinataRulesUrl =
+      buildPinataGatewayUrl(response.policyUri as string | undefined) ??
+      (response.policyUri as string | undefined);
+
     const rulesDocument = resolveRulesDocumentFields({
       explicitUrl: rulesDocumentUrl,
       explicitRaw: rulesDocumentRaw,
-      fallbackUrl: response.policyUri as string | undefined,
+      fallbackUrl: pinataRulesUrl,
       fallbackRaw: stringifyPolicy(policy),
     });
     response.rulesDocument = rulesDocument;

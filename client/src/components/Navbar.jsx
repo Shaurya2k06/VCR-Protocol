@@ -10,7 +10,8 @@ export default function Navbar() {
     { to: "/register", label: "Register" },
     { to: "/verify", label: "Verifier" },
     { to: "/demo", label: "Paywall" },
-    { to: "/explorer", label: "Explorer" }
+    { to: "/explorer", label: "Explorer" },
+    { to: "/doc/create", label: "Docs" }
   ];
 
   return (

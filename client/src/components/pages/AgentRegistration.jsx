@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { DdocEditor } from "@fileverse-dev/ddoc";
 import { vcr } from "../../lib/api";
+import { createStoredDocument } from "../../utils/api";
+import { buildIpfsGatewayUrl, extractCidFromValue, uploadDocumentToIPFS } from "../../utils/ipfs";
 
 const DEFAULT_TOKEN_OPTIONS = ["USDC", "USDT"];
 const DEFAULT_CHAIN_OPTIONS = ["base-sepolia", "base"];
@@ -91,6 +94,88 @@ function shortenAddress(value) {
   return `${value.slice(0, 6)}...${value.slice(-4)}`;
 }
 
+function toRenderableDocumentUrl(value) {
+  if (!value) {
+    return "";
+  }
+
+  if (value.startsWith("ipfs://")) {
+    return `https://ipfs.io/ipfs/${value.slice(7)}`;
+  }
+
+  return value;
+}
+
+function formatHoursWindow(allowedHours) {
+  if (!Array.isArray(allowedHours) || allowedHours.length < 2) {
+    return "No time restrictions";
+  }
+
+  return `${allowedHours[0]}:00 to ${allowedHours[1]}:00 UTC`;
+}
+
+function buildDefaultRulesDocumentSnapshot(payload) {
+  const recipients = payload.allowedRecipients.length
+    ? payload.allowedRecipients
+    : ["None specified"];
+  const tokens = payload.allowedTokens.length
+    ? payload.allowedTokens
+    : ["None specified"];
+  const chains = payload.allowedChains.length
+    ? payload.allowedChains
+    : ["None specified"];
+
+  return {
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [{ type: "text", text: payload.title }],
+      },
+      {
+        type: "paragraph",
+        content: [{ type: "text", text: `ENS: ${payload.ensName}` }],
+      },
+      {
+        type: "paragraph",
+        content: [{ type: "text", text: `Creator: ${payload.creatorAddress || "Not connected"}` }],
+      },
+      {
+        type: "paragraph",
+        content: [{ type: "text", text: `Description: ${payload.description || "Not set"}` }],
+      },
+      {
+        type: "paragraph",
+        content: [{ type: "text", text: `Max per payment (USDC): ${payload.maxPerTxUsdc}` }],
+      },
+      {
+        type: "paragraph",
+        content: [{ type: "text", text: `Daily limit (USDC): ${payload.dailyLimitUsdc}` }],
+      },
+      {
+        type: "paragraph",
+        content: [{ type: "text", text: `Allowed time window: ${formatHoursWindow(payload.allowedHours)}` }],
+      },
+      {
+        type: "paragraph",
+        content: [{ type: "text", text: `Allowed tokens: ${tokens.join(", ")}` }],
+      },
+      {
+        type: "paragraph",
+        content: [{ type: "text", text: `Allowed chains: ${chains.join(", ")}` }],
+      },
+      {
+        type: "paragraph",
+        content: [{ type: "text", text: "Allowed recipients:" }],
+      },
+      ...recipients.map((recipient) => ({
+        type: "paragraph",
+        content: [{ type: "text", text: `• ${recipient}` }],
+      })),
+    ],
+  };
+}
+
 function getWalletProvider() {
   if (typeof window === "undefined") {
     return null;
@@ -166,6 +251,13 @@ export default function AgentRegistration() {
   const [jobId, setJobId] = useState("");
   const [job, setJob] = useState(null);
   const [successResult, setSuccessResult] = useState(null);
+  const [agentRecordFromDb, setAgentRecordFromDb] = useState(null);
+  const [rulesDocTitle, setRulesDocTitle] = useState("");
+  const [rulesDocTitleTouched, setRulesDocTitleTouched] = useState(false);
+  const [rulesDocContent, setRulesDocContent] = useState(null);
+  const [rulesDocTouched, setRulesDocTouched] = useState(false);
+  const [rulesDocCid, setRulesDocCid] = useState("");
+  const [rulesDocPublishing, setRulesDocPublishing] = useState(false);
   const [openDropdown, setOpenDropdown] = useState("");
 
   useEffect(() => {
@@ -311,6 +403,38 @@ export default function AgentRegistration() {
     };
   }, [jobId, successResult]);
 
+  useEffect(() => {
+    if (!successResult?.record?.agentId) {
+      setAgentRecordFromDb(null);
+      return undefined;
+    }
+
+    let active = true;
+
+    async function loadAgentFromDb() {
+      try {
+        const response = await vcr.getAgent(successResult.record.agentId);
+        if (!active) {
+          return;
+        }
+
+        setAgentRecordFromDb(response.localRecord ?? null);
+      } catch {
+        if (!active) {
+          return;
+        }
+
+        setAgentRecordFromDb(null);
+      }
+    }
+
+    loadAgentFromDb();
+
+    return () => {
+      active = false;
+    };
+  }, [successResult]);
+
   const effectiveDomain =
     form.domainMode === "managed"
       ? form.selectedDomain
@@ -331,6 +455,9 @@ export default function AgentRegistration() {
       Number(form.endHour) <= 24);
 
   const selfOwnedUnavailable = form.domainMode === "self-owned" && !supportsSelfOwnedDomainAutomation;
+  const dbRulesDocumentUrl = agentRecordFromDb?.rulesDocumentUrl || "";
+  const renderableRulesDocumentUrl = toRenderableDocumentUrl(dbRulesDocumentUrl);
+  const rulesDocViewCid = rulesDocCid || extractCidFromValue(dbRulesDocumentUrl) || "";
 
   const reviewPayload = {
     name: form.name,
@@ -349,6 +476,50 @@ export default function AgentRegistration() {
         }
       : {}),
   };
+
+  useEffect(() => {
+    if (rulesDocTitleTouched || rulesDocTitle.trim()) {
+      return;
+    }
+
+    setRulesDocTitle(`${ensPreview} rules document`);
+  }, [ensPreview, rulesDocTitle, rulesDocTitleTouched]);
+
+  useEffect(() => {
+    if (rulesDocTouched) {
+      return;
+    }
+
+    setRulesDocContent(
+      buildDefaultRulesDocumentSnapshot({
+        title: `${ensPreview} rules document`,
+        ensName: ensPreview,
+        creatorAddress: wallet.address,
+        description: form.description.trim(),
+        maxPerTxUsdc: form.maxPerTxUsdc.trim(),
+        dailyLimitUsdc: form.dailyLimitUsdc.trim(),
+        allowedRecipients: form.allowedRecipients,
+        allowedTokens: form.allowedTokens,
+        allowedChains: form.allowedChains,
+        allowedHours: form.timeRestricted
+          ? [Number(form.startHour), Number(form.endHour)]
+          : undefined,
+      }),
+    );
+  }, [
+    ensPreview,
+    form.allowedChains,
+    form.allowedRecipients,
+    form.allowedTokens,
+    form.dailyLimitUsdc,
+    form.description,
+    form.maxPerTxUsdc,
+    form.timeRestricted,
+    form.startHour,
+    form.endHour,
+    rulesDocTouched,
+    wallet.address,
+  ]);
 
   const isStepValid = () => {
     const step = FLOW_STEPS[currentStep]?.key;
@@ -383,7 +554,12 @@ export default function AgentRegistration() {
       return form.allowedTokens.length > 0 && form.allowedChains.length > 0 && hoursValid;
     }
     if (step === "review") {
-      return readiness.ready && hoursValid && Boolean(wallet.address);
+      return (
+        readiness.ready &&
+        hoursValid &&
+        Boolean(wallet.address) &&
+        Boolean(rulesDocTitle.trim())
+      );
     }
 
     return false;
@@ -499,6 +675,13 @@ export default function AgentRegistration() {
     setCurrentStep(0);
     setError("");
     setSuccessResult(null);
+    setAgentRecordFromDb(null);
+    setRulesDocTitle("");
+    setRulesDocTitleTouched(false);
+    setRulesDocContent(null);
+    setRulesDocTouched(false);
+    setRulesDocCid("");
+    setRulesDocPublishing(false);
     setJobId("");
     setJob(null);
   };
@@ -525,6 +708,13 @@ export default function AgentRegistration() {
     setJobId("");
     setJob(null);
     setSuccessResult(null);
+    setAgentRecordFromDb(null);
+    setRulesDocTitle("");
+    setRulesDocTitleTouched(false);
+    setRulesDocContent(null);
+    setRulesDocTouched(false);
+    setRulesDocCid("");
+    setRulesDocPublishing(false);
     setOpenDropdown("");
   };
 
@@ -537,7 +727,46 @@ export default function AgentRegistration() {
     }
 
     try {
-      const response = await vcr.startRegistrationJob(reviewPayload);
+      setRulesDocPublishing(true);
+
+      const normalizedRulesDocTitle = rulesDocTitle.trim() || `${ensPreview} rules document`;
+      const normalizedRulesDocContent =
+        rulesDocContent ??
+        buildDefaultRulesDocumentSnapshot({
+          title: normalizedRulesDocTitle,
+          ensName: ensPreview,
+          creatorAddress: wallet.address,
+          description: form.description.trim(),
+          maxPerTxUsdc: form.maxPerTxUsdc.trim(),
+          dailyLimitUsdc: form.dailyLimitUsdc.trim(),
+          allowedRecipients: form.allowedRecipients,
+          allowedTokens: form.allowedTokens,
+          allowedChains: form.allowedChains,
+          allowedHours: form.timeRestricted
+            ? [Number(form.startHour), Number(form.endHour)]
+            : undefined,
+        });
+
+      if (!normalizedRulesDocContent || typeof normalizedRulesDocContent !== "object") {
+        throw new Error("Rules document is invalid. Please edit the document and try again.");
+      }
+
+      const cid = await uploadDocumentToIPFS(normalizedRulesDocContent);
+      await createStoredDocument({
+        title: normalizedRulesDocTitle,
+        cid,
+      });
+
+      setRulesDocCid(cid);
+
+      const rulesDocumentUrl = buildIpfsGatewayUrl(cid);
+
+      const response = await vcr.startRegistrationJob({
+        ...reviewPayload,
+        rulesDocumentUrl,
+        rulesDocumentRaw: JSON.stringify(normalizedRulesDocContent),
+      });
+
       setJobId(response.jobId);
       setJob({
         status: response.status,
@@ -549,7 +778,9 @@ export default function AgentRegistration() {
         logs: [],
       });
     } catch (submitError) {
-      setError(submitError.message);
+      setError(submitError instanceof Error ? submitError.message : "Failed to create agent");
+    } finally {
+      setRulesDocPublishing(false);
     }
   };
 
@@ -937,6 +1168,49 @@ export default function AgentRegistration() {
                 : "No time restriction"}
             </strong>
           </div>
+          <div className="wizard-review-item wide">
+            <span>Rules document (Fileverse dDoc)</span>
+            <label className="wizard-label" style={{ marginBottom: 6 }}>Document title</label>
+            <input
+              className="wizard-input mono"
+              value={rulesDocTitle}
+              onChange={(event) => {
+                setRulesDocTitleTouched(true);
+                setRulesDocTitle(event.target.value);
+              }}
+              placeholder={`${ensPreview} rules document`}
+            />
+
+            <div
+              style={{
+                border: "3px solid var(--nb-ink)",
+                boxShadow: "4px 4px 0 var(--nb-ink)",
+                background: "#fff",
+                padding: 12,
+                marginTop: 12,
+              }}
+            >
+              <DdocEditor
+                initialContent={rulesDocContent}
+                onChange={(doc) => {
+                  if (doc && typeof doc === "object") {
+                    setRulesDocTouched(true);
+                    setRulesDocContent(doc);
+                  }
+                }}
+                documentStyling={{
+                  canvasBackground: "#ffffff",
+                  textColor: "#000000",
+                  fontFamily: "Inter, sans-serif",
+                }}
+                editorCanvasClassNames="max-w-3xl mx-auto"
+              />
+            </div>
+
+            <p className="wizard-help" style={{ marginTop: 8 }}>
+              This document will be published to IPFS via Pinata and linked to this agent record on creation.
+            </p>
+          </div>
         </div>
 
         {selfOwnedUnavailable && (
@@ -1116,9 +1390,9 @@ export default function AgentRegistration() {
                     type="button"
                     className="btn btn-primary"
                     onClick={submit}
-                    disabled={!isStepValid() || !readiness.ready}
+                    disabled={!isStepValid() || !readiness.ready || rulesDocPublishing}
                   >
-                    Create agent
+                    {rulesDocPublishing ? "Publishing rules document..." : "Create agent"}
                   </button>
                 )}
               </div>
@@ -1231,6 +1505,22 @@ export default function AgentRegistration() {
                   <span>Backend signer</span>
                   <strong className="mono">{successResult.ownership?.signingAddress || signingAddress}</strong>
                 </div>
+                <div className="wizard-review-item">
+                  <span>Rules doc (from DB)</span>
+                  {dbRulesDocumentUrl ? (
+                    <a href={dbRulesDocumentUrl} target="_blank" rel="noreferrer" className="mono">
+                      Open rules document
+                    </a>
+                  ) : (
+                    <strong>Loading or unavailable</strong>
+                  )}
+                </div>
+                {rulesDocViewCid && (
+                  <div className="wizard-review-item">
+                    <span>Rules doc CID</span>
+                    <strong className="mono">{rulesDocViewCid}</strong>
+                  </div>
+                )}
               </div>
 
               <div className="wizard-success-links">
@@ -1246,6 +1536,16 @@ export default function AgentRegistration() {
                 <a href={successResult.links.ensTx} target="_blank" rel="noreferrer" className="btn btn-ghost">
                   ENS tx
                 </a>
+                {renderableRulesDocumentUrl && (
+                  <a href={renderableRulesDocumentUrl} target="_blank" rel="noreferrer" className="btn btn-primary">
+                    Open rules doc
+                  </a>
+                )}
+                {rulesDocViewCid && (
+                  <Link to={`/doc/${rulesDocViewCid}`} className="btn btn-primary">
+                    Open Fileverse viewer
+                  </Link>
+                )}
               </div>
 
               <div className="wizard-review-grid">
