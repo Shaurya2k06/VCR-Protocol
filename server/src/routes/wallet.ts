@@ -41,8 +41,9 @@ router.post("/", async (req, res) => {
 
         return res.status(201).json({
             walletId: result.walletId,
-            receiveAddress: result.receiveAddress,
-            pendingChainInitialization: result.pendingChainInitialization,
+            forwarderAddress: result.forwarderAddress,
+            walletVersion: result.walletVersion,
+            nativePoliciesSet: result.nativePoliciesSet,
             agentId,
             warning:
                 "userKeyEncrypted is returned ONLY ONCE. Store it securely. Policies lock 48h after wallet creation.",

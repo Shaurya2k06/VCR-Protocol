@@ -64,6 +64,7 @@ export const vcr = {
   getLogs: (ensName) => api(`/api/verify/logs/${encodeURIComponent(ensName)}`),
 
   // Register
+  getRegistrationReadiness: () => api("/api/register/readiness"),
   registerAgent: (body) => api("/api/register", { method: "POST", body }),
   getAgent: (agentId) => api(`/api/register/${encodeURIComponent(agentId)}`),
   getAgentsByOwner: (address) =>

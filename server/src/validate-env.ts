@@ -7,16 +7,15 @@ const required: string[] = [
     "BITGO_ENTERPRISE_ID",
     "PINATA_JWT",
     "PINATA_GATEWAY",
+    "PIMLICO_API_KEY",
     "PRIVATE_KEY",
     "SEPOLIA_RPC_URL",
-    "ENS_NAME",
     "MONGODB_URI",
 ];
 
 const optional: string[] = [
     "BITGO_WALLET_ID",
     "BITGO_WALLET_PASSPHRASE",
-    "PIMLICO_API_KEY",
     "MAINNET_RPC_URL",
     "ALCHEMY_API_KEY",
     "DEMO_RECIPIENT_ADDRESS",
