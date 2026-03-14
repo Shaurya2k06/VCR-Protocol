@@ -178,38 +178,23 @@ export async function setAllENSRecords(
   const resolver = ENS_ADDRESSES.publicResolverSepolia;
   const agentKey = buildAgentRegistrationKey(registryAddress, chainId, agentId);
 
-  const encoded1 = encodeFunctionData({
+  console.log(`\n      [ENS] Setting agent-registration key individually...`);
+  const tx1 = await walletClient.writeContract({
+    address: resolver,
     abi: resolverAbi,
     functionName: "setText",
     args: [node, agentKey, "1"],
   });
-  const encoded2 = encodeFunctionData({
+  
+  console.log(`      [ENS] Setting vcr.policy key individually...`);
+  const tx2 = await walletClient.writeContract({
+    address: resolver,
     abi: resolverAbi,
     functionName: "setText",
     args: [node, "vcr.policy", policyUri],
   });
 
-  let txHash: `0x${string}` | undefined;
-  for (let attempt = 1; attempt <= 5; attempt++) {
-    try {
-      txHash = await walletClient.writeContract({
-        address: resolver,
-        abi: resolverAbi,
-        functionName: "multicall",
-        args: [[encoded1, encoded2]],
-      });
-      break;
-    } catch (err: any) {
-      if (attempt < 5 && err.message?.includes("reverted")) {
-        console.log(`\n      ⚠️  Resolver not ready yet (Tx reverted). Retrying in 15s (Attempt ${attempt}/5)…`);
-        await new Promise(r => setTimeout(r, 15000));
-      } else {
-        throw err;
-      }
-    }
-  }
-
-  return { txHash: txHash! };
+  return { txHash: tx2 };
 }
 
 // ─── Read Operations ──────────────────────────────────────────────────────────

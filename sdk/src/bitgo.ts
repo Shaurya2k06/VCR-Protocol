@@ -63,6 +63,7 @@ export async function createAgentWallet(
   allowedRecipients?: string[],
   dailyLimitWei?: string,
   _maxPerTxWei?: string, // reserved for future per-tx BitGo rule
+  isTestnet: boolean = true,
 ): Promise<BitGoWalletResult> {
   const bitgo = getBitGo();
 
@@ -79,8 +80,7 @@ export async function createAgentWallet(
     label,
     passphrase: walletPassphrase,
     enterprise: enterpriseId,
-    walletVersion: 3, // MUST be 3 — v6 requires a support ticket
-    multisigType: "tss", // Changed from onchain to tss as onchain fails on testnet
+    ...(isTestnet ? {} : { walletVersion: 3, multisigType: "onchain" }),
   } as any);
 
   const wallet = result.wallet;
@@ -119,34 +119,30 @@ export async function createAgentWallet(
   // ── Step 3: Set policy rules ───────────────────────────────────────────────
   // ⚠️  48-HOUR LOCK — After 48 hours from wallet creation, policy rules are
   //     IMMUTABLE FOREVER. Add ALL recipient addresses before this window closes.
-  if (allowedRecipients && allowedRecipients.length > 0) {
-    // TEMPORARILY DISABLED: BitGo testnet rejects both 'whitelist' and 'advancedWhitelist' formats.
-    /*
-    await (liveWallet as any).createPolicyRule({
-      id: "vcr-whitelist",
-      type: "whitelist",
-      condition: {
-        addresses: allowedRecipients,
-      },
-      action: { type: "deny" },
-    });
-    */
-  }
+  if (!isTestnet) {
+    if (allowedRecipients && allowedRecipients.length > 0) {
+      await (liveWallet as any).createPolicyRule({
+        id: "vcr-whitelist",
+        type: "whitelist",
+        condition: {
+          addresses: allowedRecipients,
+        },
+        action: { type: "deny" },
+      });
+    }
 
-  if (dailyLimitWei) {
-    // TEMPORARILY DISABLED: BitGo testnet rejects velocityLimit for this wallet type.
-    /*
-    await (liveWallet as any).createPolicyRule({
-      id: "vcr-velocity",
-      type: "velocityLimit",
-      condition: {
-        amountString: dailyLimitWei, // MUST be in WEI
-        timeWindow: 86400, // 24 hours in seconds
-        groupBy: ["wallet"],
-      },
-      action: { type: "getApproval" },
-    });
-    */
+    if (dailyLimitWei) {
+      await (liveWallet as any).createPolicyRule({
+        id: "vcr-velocity",
+        type: "velocityLimit",
+        condition: {
+          amountString: dailyLimitWei, // MUST be in WEI
+          timeWindow: 86400, // 24 hours in seconds
+          groupBy: ["wallet"],
+        },
+        action: { type: "getApproval" },
+      });
+    }
   }
 
   // ── Step 4: Create forwarder address ──────────────────────────────────────
@@ -170,9 +166,11 @@ export async function createAgentWallet(
 
   return {
     walletId,
+    walletVersion: (result.wallet as any)._wallet?.walletVersion ?? 2,
     forwarderAddress,
     userKeyPrv, // Caller MUST store this — it is never available again.
     policyHash,
+    nativePoliciesSet: !isTestnet,
   };
 }
 
