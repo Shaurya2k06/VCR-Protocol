@@ -35,6 +35,7 @@ export type {
   X402PaymentRequirement,
   // IPFS
   PinResult,
+  FileversePolicyResult,
   // ENS
   ENSSetResult,
 } from "./types.js";
@@ -51,6 +52,7 @@ export {
   validatePolicy,
   pinPolicy,
   fetchPolicy,
+  extractPolicyCid,
   serializePolicy,
   computePolicyHash,
 } from "./policy.js";
@@ -86,6 +88,10 @@ export { verifyPolicyIntegrity } from "./verifyIntegrity.js";
 // ─── Agent Lifecycle ──────────────────────────────────────────────────────────
 
 export { createAgent } from "./createAgent.js";
+export {
+  buildPolicyNamespace,
+  storePolicyDocument,
+} from "./fileverse.js";
 
 // ─── ENS Integration ──────────────────────────────────────────────────────────
 
@@ -94,10 +100,13 @@ export {
   ERC8004_REGISTRY_SEPOLIA,
   encodeERC7930,
   buildAgentRegistrationKey,
+  buildPolicyGatewayUrl,
   setVCRPolicyRecord,
   setAgentRegistrationRecord,
   setAllENSRecords,
   getVCRPolicyUri,
+  getVCRPolicyContenthashUri,
+  getLegacyVCRPolicyText,
   getAgentRegistrationRecord,
   verifyAgentENSLink,
 } from "./ens.js";

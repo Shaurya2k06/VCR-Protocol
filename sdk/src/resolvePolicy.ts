@@ -1,11 +1,10 @@
 // ─── VCR Protocol SDK — Policy Resolution (ENS → IPFS) ───────────────────────
-// Resolves an ENS name's vcr.policy text record to a VCRPolicy document.
+// Resolves an ENS name's policy pointer to a VCRPolicy document.
 // Results are cached for 5 minutes to avoid hammering ENS/IPFS on every call.
 
-import { createPublicClient, http } from "viem";
-import { sepolia } from "viem/chains";
-import { normalize } from "viem/ens";
 import type { VCRPolicy } from "./types.js";
+import { getVCRPolicyUri } from "./ens.js";
+import { extractPolicyCid } from "./policy.js";
 
 // ─── Cache ────────────────────────────────────────────────────────────────────
 
@@ -16,14 +15,6 @@ interface CacheEntry {
 
 const policyCache = new Map<string, CacheEntry>();
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-
-// ─── Client factory ───────────────────────────────────────────────────────────
-
-function getDefaultPublicClient() {
-  const rpcUrl = process.env.SEPOLIA_RPC_URL;
-  if (!rpcUrl) throw new Error("SEPOLIA_RPC_URL must be set in environment");
-  return createPublicClient({ chain: sepolia, transport: http(rpcUrl) });
-}
 
 // ─── IPFS fetch with multi-gateway fallback ───────────────────────────────────
 
@@ -77,20 +68,18 @@ async function fetchFromIPFS(cid: string): Promise<VCRPolicy> {
  *
  * Flow:
  *   1. Check in-memory cache (5-minute TTL)
- *   2. Read `vcr.policy` text record from ENS
+ *   2. Read the policy pointer from ENS (`contenthash`, with legacy fallback)
  *   3. Fetch policy JSON from IPFS using the CID in the text record
  *   4. Cache and return the policy
  *
- * Returns `null` if no `vcr.policy` record is set on the ENS name.
+ * Returns `null` if no policy pointer is set on the ENS name.
  *
  * @param ensName      - e.g. "researcher-001.acmecorp.eth"
  * @param publicClient - Optional viem public client; defaults to SEPOLIA_RPC_URL env var
  */
 export async function resolveAgentPolicy(
   ensName: string,
-  publicClient?: {
-    getEnsText: (params: { name: string; key: string }) => Promise<string | null>;
-  },
+  _publicClient?: unknown,
 ): Promise<VCRPolicy | null> {
   // ── 1. Check cache ─────────────────────────────────────────────────────────
   const cached = policyCache.get(ensName);
@@ -98,17 +87,8 @@ export async function resolveAgentPolicy(
     return cached.policy;
   }
 
-  // ── 2. Read ENS text record ────────────────────────────────────────────────
-  const client =
-    publicClient ??
-    (getDefaultPublicClient() as unknown as {
-      getEnsText: (params: { name: string; key: string }) => Promise<string | null>;
-    });
-
-  const policyUri = await client.getEnsText({
-    name: normalize(ensName),
-    key: "vcr.policy",
-  });
+  // ── 2. Read ENS policy pointer ─────────────────────────────────────────────
+  const policyUri = await getVCRPolicyUri(ensName);
 
   if (!policyUri) {
     return null;
@@ -116,7 +96,7 @@ export async function resolveAgentPolicy(
 
   // ── 3. Fetch from IPFS ─────────────────────────────────────────────────────
   // policyUri format: "ipfs://bafkrei..."
-  const cid = policyUri.startsWith("ipfs://") ? policyUri.slice(7) : policyUri;
+  const cid = extractPolicyCid(policyUri);
   const policy = await fetchFromIPFS(cid);
 
   // ── 4. Cache and return ────────────────────────────────────────────────────

@@ -15,6 +15,7 @@ node_modules
 # agents/<name>.json contains walletPassphrase — never commit
 # agents/<name>.key  contains plaintext BitGo user private key — never commit
 agents/
+creds/
 
 # ─── BitGo key files ──────────────────────────────────────────────────────────
 *.key
