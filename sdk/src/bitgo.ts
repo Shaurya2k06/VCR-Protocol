@@ -1,8 +1,8 @@
 // ─── BitGo SDK — Wallet & Policy Management ───────────────────────────────────
 //
 // Key rules:
-//   • walletVersion MUST be 3  (v6 requires a BitGo support ticket)
-//   • multisigType  MUST be "onchain"  (TSS requires contacting BitGo support)
+//   • On hteth testnet, set walletVersion to 3 during generateWallet()
+//   • Do NOT force multisigType="onchain" on hteth (causes key-type mismatch)
 //   • All policy amounts MUST be in WEI — NOT USD, NOT USDC base units.
 //     1 ETH = 1_000_000_000_000_000_000 wei.
 //   • BitGo OTP for test env is EXACTLY 7 zeroes: "0000000"
@@ -23,7 +23,9 @@ function getBitGo(): BitGoAPI {
   if (!accessToken) throw new Error("BITGO_ACCESS_TOKEN not set");
 
   const bitgo = new BitGoAPI({ env: "test" });
+  // @ts-ignore - BitGo's package typings can drift across releases.
   bitgo.register("eth", Eth.createInstance);
+  // @ts-ignore - BitGo's package typings can drift across releases.
   bitgo.register("hteth", Eth.createInstance); // Hoodi testnet (chain ID 560048)
   bitgo.authenticateWithAccessToken({ accessToken });
   return bitgo;
@@ -85,6 +87,7 @@ export async function createAgentWallet(
     label,
     passphrase: walletPassphrase,
     enterprise: enterpriseId,
+    walletVersion: 3,
   } as any);
 
   const wallet = result.wallet;
@@ -113,7 +116,7 @@ export async function createAgentWallet(
   if (!initialized) {
     throw new Error(
       `BitGo wallet ${walletId} initialization timed out after 5 minutes. ` +
-        "Check that the enterprise gas tank has sufficient ETH on Hoodi testnet.",
+      "Check that the enterprise gas tank has sufficient ETH on Hoodi testnet.",
     );
   }
 
@@ -184,7 +187,8 @@ export async function createAgentWallet(
  * Get a BitGo wallet instance by ID.
  * Useful for calling getPolicies(), sendMany(), etc. directly.
  */
-export async function getWallet(walletId: string) {
+// @ts-ignore — return type depends on @bitgo/sdk-core internals; caller uses `any` cast anyway
+export async function getWallet(walletId: string): Promise<any> {
   const bitgo = getBitGo();
   return bitgo.coin("hteth").wallets().get({ id: walletId });
 }

@@ -36,17 +36,42 @@ if (!RPC_URL) {
   process.exit(1);
 }
 
-// Load agent record — created by `npm run setup`
+// Load the latest agent record — created by `npm run setup`
+import fs from "fs";
+import path from "path";
+
 let agentRecord: { ensName: string; policyCid: string; policyHash: string };
 try {
-  const { default: record } = await import(
-    "../agents/researcher-001.json",
-    { assert: { type: "json" } }
-  );
-  agentRecord = record as typeof agentRecord;
+  const agentsDir = path.resolve(import.meta.dirname ?? ".", "..", "agents");
+  const files = fs.readdirSync(agentsDir).filter((f: string) => f.endsWith(".json"));
+  if (files.length === 0) throw new Error("No agent files found");
+  const latest = files
+    .map((file) => {
+      const filePath = path.join(agentsDir, file);
+      const raw = fs.readFileSync(filePath, "utf-8");
+      const record = JSON.parse(raw) as typeof agentRecord & { createdAt?: string };
+      const createdAtMs = typeof record.createdAt === "string"
+        ? Date.parse(record.createdAt)
+        : Number.NaN;
+      return {
+        file,
+        path: filePath,
+        raw,
+        createdAtMs: Number.isFinite(createdAtMs) ? createdAtMs : -1,
+        mtimeMs: fs.statSync(filePath).mtimeMs,
+      };
+    })
+    .sort((a, b) => {
+      if (b.createdAtMs !== a.createdAtMs) {
+        return b.createdAtMs - a.createdAtMs;
+      }
+      return b.mtimeMs - a.mtimeMs;
+    })[0]!;
+  console.log(`  Loading agent: ${latest.file}`);
+  agentRecord = JSON.parse(latest.raw) as typeof agentRecord;
 } catch {
   console.error(
-    "❌  agents/researcher-001.json not found.\n" +
+    "❌  No agent JSON found in agents/.\n" +
     "   Run `npm run setup` first to create an agent, then re-run this demo.",
   );
   process.exit(1);
@@ -92,7 +117,7 @@ async function main() {
   try {
     const resolved = await resolveAgentPolicy(ensName, publicClient as any);
     if (!resolved) {
-      console.error("│  ❌  No vcr.policy text record found on ENS.\n│  Has the agent been set up?");
+      console.error("│  ❌  No VCR policy pointer found on ENS.\n│  Has the agent been set up?");
       process.exit(1);
     }
     policy = resolved;
@@ -122,10 +147,10 @@ async function main() {
   console.log("┌─ [2] Attempting an ALLOWED payment ($0.10 to whitelisted addr) ─┐");
   {
     const req = {
-      amount:    "100000",  // $0.10 USDC (6 decimals)
-      token:     "USDC",
+      amount: "100000",  // $0.10 USDC (6 decimals)
+      token: "USDC",
       recipient: firstRecipient,
-      chain:     "base-sepolia",
+      chain: "base-sepolia",
     };
 
     const result = await canAgentSpend(ensName, req, getDailySpent);
@@ -148,10 +173,10 @@ async function main() {
   {
     const unknownAddr = "0x1234567890123456789012345678901234567890";
     const req = {
-      amount:    "100000",
-      token:     "USDC",
+      amount: "100000",
+      token: "USDC",
       recipient: unknownAddr,
-      chain:     "base-sepolia",
+      chain: "base-sepolia",
     };
 
     const result = await canAgentSpend(ensName, req, getDailySpent);
@@ -168,10 +193,10 @@ async function main() {
     // Try $10,000 — well over any reasonable maxTransaction
     const hugeAmount = "10000000000"; // $10,000 USDC (6 decimals)
     const req = {
-      amount:    hugeAmount,
-      token:     "USDC",
+      amount: hugeAmount,
+      token: "USDC",
       recipient: firstRecipient,
-      chain:     "base-sepolia",
+      chain: "base-sepolia",
     };
 
     const result = await canAgentSpend(ensName, req, getDailySpent);

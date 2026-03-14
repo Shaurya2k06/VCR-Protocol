@@ -1,9 +1,10 @@
-import { getWalletClient } from "./client.js";
+import { getEOAWalletClient } from "./client.js";
+import { decode as decodeContenthash, encode as encodeContenthash } from "@ensdomains/content-hash";
+import { extractPolicyCid } from "./policy.js";
 
-// ─── ENS Integration — ENSIP-25 + VCR Policy Text Records ────────────────────
+// ─── ENS Integration — ENSIP-25 + Policy contenthash ─────────────────────────
 import {
   createPublicClient,
-  createWalletClient,
   http,
   parseAbi,
   encodeFunctionData,
@@ -14,7 +15,6 @@ import {
 } from "viem";
 import { sepolia } from "viem/chains";
 import { normalize, namehash } from "viem/ens";
-import { privateKeyToAccount } from "viem/accounts";
 import type { ENSSetResult, LinkVerificationResult } from "./types.js";
 
 // ─── Contract Addresses ───────────────────────────────────────────────────────
@@ -126,31 +126,81 @@ function getPublicClient() {
 
 const resolverAbi = parseAbi([
   "function setText(bytes32 node, string calldata key, string calldata value) external",
+  "function setContenthash(bytes32 node, bytes calldata hash) external",
+  "function contenthash(bytes32 node) external view returns (bytes memory)",
   "function multicall(bytes[] calldata data) external returns (bytes[] memory)",
 ]);
 
 // ─── Write Operations ─────────────────────────────────────────────────────────
 
+function normalizeIpfsUri(policyUriOrCid: string): string {
+  return `ipfs://${extractPolicyCid(policyUriOrCid)}`;
+}
+
+function encodeIpfsContenthash(policyUriOrCid: string): `0x${string}` {
+  const cid = normalizeIpfsUri(policyUriOrCid).slice(7);
+  return `0x${encodeContenthash("ipfs", cid)}` as `0x${string}`;
+}
+
+function normalizeGatewayHost(gateway: string): string {
+  return gateway.replace(/^https?:\/\//i, "").replace(/\/+$/g, "");
+}
+
+export function buildPolicyGatewayUrl(policyUriOrCid: string): string {
+  const cid = extractPolicyCid(policyUriOrCid);
+  const pinataGateway = process.env.PINATA_GATEWAY;
+  if (pinataGateway) return `https://${normalizeGatewayHost(pinataGateway)}/ipfs/${cid}`;
+  return `https://dweb.link/ipfs/${cid}`;
+}
+
+function decodeIpfsContenthashRecord(contenthash: string | null): string | null {
+  if (!contenthash || contenthash === "0x") return null;
+
+  try {
+    const decoded = decodeContenthash(contenthash);
+    return decoded ? `ipfs://${decoded}` : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Set the vcr.policy ENS text record pointing to an IPFS CID.
+ * Set the ENS contenthash record pointing to an IPFS CID.
  */
 export async function setVCRPolicyRecord(
   ensName: string,
-  policyUri: string,
+  policyUriOrCid: string,
 ): Promise<ENSSetResult> {
-  const walletClient = await getWalletClient();
+  const walletClient = getEOAWalletClient();
   await ensureSubdomainExists(ensName);
   const node = namehash(normalize(ensName));
   const resolver = ENS_ADDRESSES.publicResolverSepolia;
 
+  const encodedLegacyText = encodeFunctionData({
+    abi: resolverAbi,
+    functionName: "setText",
+    args: [node, "vcr.policy", buildPolicyGatewayUrl(policyUriOrCid)],
+  });
+
+  const encodedContenthash = encodeFunctionData({
+    abi: resolverAbi,
+    functionName: "setContenthash",
+    args: [node, encodeIpfsContenthash(policyUriOrCid)],
+  });
+
   const txHash = await walletClient.writeContract({
     address: resolver,
     abi: resolverAbi,
-    functionName: "setText",
-    args: [node, "vcr.policy", policyUri],
+    functionName: "multicall",
+    args: [[encodedContenthash, encodedLegacyText]],
   });
 
-  return { txHash, ensName, key: "vcr.policy", value: policyUri };
+  return {
+    txHash,
+    ensName,
+    key: "contenthash+vcr.policy",
+    value: buildPolicyGatewayUrl(policyUriOrCid),
+  };
 }
 
 /**
@@ -163,7 +213,7 @@ export async function setAgentRegistrationRecord(
   registryAddress = ERC8004_REGISTRY_SEPOLIA,
   chainId = 11155111,
 ): Promise<ENSSetResult> {
-  const walletClient = await getWalletClient();
+  const walletClient = getEOAWalletClient();
   await ensureSubdomainExists(ensName);
   const node = namehash(normalize(ensName));
   const resolver = ENS_ADDRESSES.publicResolverSepolia;
@@ -180,16 +230,17 @@ export async function setAgentRegistrationRecord(
 }
 
 /**
- * Set both agent-registration and vcr.policy records in a single multicall tx.
+ * Set both the ENSIP-25 agent-registration text record and the policy
+ * contenthash record in a single multicall transaction.
  */
 export async function setAllENSRecords(
   ensName: string,
   agentId: number,
-  policyUri: string,
+  policyUriOrCid: string,
   registryAddress = ERC8004_REGISTRY_SEPOLIA,
   chainId = 11155111,
 ): Promise<{ txHash: string }> {
-  const walletClient = await getWalletClient();
+  const walletClient = getEOAWalletClient();
   await ensureSubdomainExists(ensName);
   const node = namehash(normalize(ensName));
   const resolver = ENS_ADDRESSES.publicResolverSepolia;
@@ -203,16 +254,22 @@ export async function setAllENSRecords(
 
   const encodedPolicyPointer = encodeFunctionData({
     abi: resolverAbi,
-    functionName: "setText",
-    args: [node, "vcr.policy", policyUri],
+    functionName: "setContenthash",
+    args: [node, encodeIpfsContenthash(policyUriOrCid)],
   });
 
-  console.log(`\n      [ENS] Setting agent-registration + vcr.policy via multicall...`);
+  const encodedLegacyPolicyText = encodeFunctionData({
+    abi: resolverAbi,
+    functionName: "setText",
+    args: [node, "vcr.policy", buildPolicyGatewayUrl(policyUriOrCid)],
+  });
+
+  console.log(`\n      [ENS] Setting agent-registration + contenthash + vcr.policy via multicall...`);
   const txHash = await walletClient.writeContract({
     address: resolver,
     abi: resolverAbi,
     functionName: "multicall",
-    args: [[encodedAgentRegistration, encodedPolicyPointer]],
+    args: [[encodedAgentRegistration, encodedPolicyPointer, encodedLegacyPolicyText]],
   });
 
   return { txHash };
@@ -237,7 +294,7 @@ function computeSubnodeHash(parentNode: `0x${string}`, sublabel: string): `0x${s
  * Creates the subdomain if it doesn't exist; skips if it already does.
  */
 async function ensureSubdomainExists(ensName: string): Promise<void> {
-  const walletClient = await getWalletClient();
+  const walletClient = getEOAWalletClient();
   const publicClient = getPublicClient();
   const signerAddress = walletClient.account!.address as `0x${string}`;
   const resolver = ENS_ADDRESSES.publicResolverSepolia;
@@ -349,10 +406,45 @@ async function ensureSubdomainExists(ensName: string): Promise<void> {
 // ─── Read Operations ──────────────────────────────────────────────────────────
 
 /**
- * Read the vcr.policy text record from ENS.
- * Returns the ipfs:// URI or null if not set.
+ * Read the policy pointer from ENS.
+ * Prefers EIP-1577 contenthash and falls back to the legacy `vcr.policy`
+ * text record for backward compatibility.
  */
 export async function getVCRPolicyUri(ensName: string): Promise<string | null> {
+  const contenthashUri = await getVCRPolicyContenthashUri(ensName);
+  if (contenthashUri) {
+    return contenthashUri;
+  }
+
+  return getLegacyVCRPolicyText(ensName);
+}
+
+export async function getVCRPolicyContenthashUri(ensName: string): Promise<string | null> {
+  const publicClient = getPublicClient();
+  const normalizedName = normalize(ensName);
+  const resolver = await publicClient.getEnsResolver({ name: normalizedName });
+  const node = namehash(normalizedName);
+
+  if (resolver) {
+    try {
+      const contenthash = (await publicClient.readContract({
+        address: resolver,
+        abi: resolverAbi,
+        functionName: "contenthash",
+        args: [node],
+      })) as string;
+
+      const uri = decodeIpfsContenthashRecord(contenthash);
+      if (uri) return uri;
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+export async function getLegacyVCRPolicyText(ensName: string): Promise<string | null> {
   const publicClient = getPublicClient();
   return publicClient.getEnsText({
     name: normalize(ensName),
