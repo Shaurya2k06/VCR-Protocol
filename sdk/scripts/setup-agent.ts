@@ -37,6 +37,7 @@ interface ParsedArgs {
   hours?: [number, number];
   description?: string;
   dryRun: boolean;
+  yes: boolean;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -64,7 +65,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   const domain =
     get("--domain") ??
     process.env.ENS_BASE_DOMAIN ??
-    "example.eth";
+    "";
 
   const maxTx =
     get("--max-tx") ??
@@ -105,8 +106,9 @@ function parseArgs(argv: string[]): ParsedArgs {
 
   const description = get("--description") ?? process.env.AGENT_DESCRIPTION;
   const dryRun = has("--dry-run");
+  const yes = has("--yes");
 
-  return { name, domain, maxTx, daily, recipients, tokens, chains, hours, description, dryRun };
+  return { name, domain, maxTx, daily, recipients, tokens, chains, hours, description, dryRun, yes };
 }
 
 // ─── Validation ───────────────────────────────────────────────────────────────
@@ -154,8 +156,14 @@ function validateArgs(args: ParsedArgs): void {
   if (!/^[a-z0-9-]+$/.test(args.name)) {
     errors.push(`--name "${args.name}" must contain only lowercase letters, numbers, and hyphens`);
   }
+  if (!args.domain) {
+    errors.push(`Missing ENS base domain. Use --domain acmecorp.eth or set ENS_BASE_DOMAIN in .env`);
+  }
   if (!args.domain.includes(".")) {
     errors.push(`--domain "${args.domain}" must be a valid ENS name (e.g. acmecorp.eth)`);
+  }
+  if (args.domain === "example.eth") {
+    errors.push(`--domain "example.eth" is a placeholder and is not owned by your wallet. Use a real ENS name you own.`);
   }
   const maxTxNum = parseFloat(args.maxTx);
   if (isNaN(maxTxNum) || maxTxNum <= 0) {
@@ -269,7 +277,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const ok = await confirm("Proceed with agent creation?");
+  const ok = args.yes || await confirm("Proceed with agent creation?");
   if (!ok) {
     console.log("\nAborted.\n");
     process.exit(0);
