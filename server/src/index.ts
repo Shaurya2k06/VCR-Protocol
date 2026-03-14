@@ -18,7 +18,7 @@ const PORT = parseInt(process.env.PORT ?? "3001");
 // ─── Middleware ───────────────────────────────────────────────────────────────
 
 app.use(cors());
-app.use(express.json({ limit: "5mb" }));
+app.use(express.json({ limit: "10mb" }));
 
 // Request logger (dev)
 if (process.env.NODE_ENV !== "production") {

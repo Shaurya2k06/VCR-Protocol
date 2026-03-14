@@ -81,7 +81,7 @@ describe("buildAgentMetadataJson", () => {
             0
         );
 
-        expect(meta.supportedTrust).toContain("reputation");
+        expect(meta.supportedTrust).toContain("erc8004-reputation");
         expect(meta.supportedTrust).toContain("vcr-policy");
     });
 
