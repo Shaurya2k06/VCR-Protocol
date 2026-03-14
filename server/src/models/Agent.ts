@@ -10,6 +10,10 @@ export interface IAgent extends Document {
     description?: string;
     /** Owner wallet address (checksummed) */
     ownerAddress: string;
+    /** Frontend wallet that initiated agent creation */
+    creatorAddress?: string;
+    /** Registration mode used in the frontend */
+    registrationMode?: "managed" | "self-owned";
     /** Agent wallet address (if different from owner) */
     agentWalletAddress?: string;
     /** ENS name linked to this agent */
@@ -42,6 +46,8 @@ const AgentSchema = new Schema<IAgent>(
         name: { type: String, required: true },
         description: { type: String },
         ownerAddress: { type: String, required: true, lowercase: true },
+        creatorAddress: { type: String, lowercase: true },
+        registrationMode: { type: String, enum: ["managed", "self-owned"] },
         agentWalletAddress: { type: String, lowercase: true },
         ensName: { type: String, lowercase: true, sparse: true },
         agentUri: { type: String, required: true },
@@ -59,6 +65,7 @@ const AgentSchema = new Schema<IAgent>(
 
 // Index for common lookups
 AgentSchema.index({ ownerAddress: 1 });
+AgentSchema.index({ creatorAddress: 1 });
 
 export const Agent = mongoose.model<IAgent>("Agent", AgentSchema);
 
@@ -77,7 +84,10 @@ export async function getAgentByEnsName(ensName: string): Promise<IAgent | null>
 }
 
 export async function getAgentsByOwner(ownerAddress: string): Promise<IAgent[]> {
-    return Agent.find({ ownerAddress: ownerAddress.toLowerCase() });
+    const normalized = ownerAddress.toLowerCase();
+    return Agent.find({
+        $or: [{ ownerAddress: normalized }, { creatorAddress: normalized }],
+    });
 }
 
 export async function updateAgentPolicy(

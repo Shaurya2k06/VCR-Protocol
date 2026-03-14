@@ -2,21 +2,43 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { vcr } from "../../lib/api";
 
+const DEFAULT_TOKEN_OPTIONS = ["USDC", "USDT"];
+const DEFAULT_CHAIN_OPTIONS = ["base-sepolia", "base"];
+const DEFAULT_DOMAIN_OPTIONS = ["vcrtcorp.eth"];
+const DEFAULT_DOMAIN_MODE_OPTIONS = [
+  {
+    id: "managed",
+    label: "Managed by VCR",
+    description: "One-click launch under the platform domain with backend-assisted ENS writes.",
+  },
+  {
+    id: "self-owned",
+    label: "Self-owned ENS",
+    description: "Use your wallet and pay ENS gas yourself for a domain you already own or will register.",
+  },
+];
 const DEMO_RECIPIENTS = [
   "0x1234567890123456789012345678901234567890",
   "0xAbCdEf1234567890aBCDef1234567890ABcDeF12",
 ];
 
-const DEFAULT_FORM = {
-  name: "",
-  baseDomain: "",
-  description: "",
-  maxPerTxUsdc: "25",
-  dailyLimitUsdc: "100",
-  allowedTokens: "USDC",
-  allowedChains: "base-sepolia",
-  startHour: "",
-  endHour: "",
+const FLOW_STEPS = [
+  { key: "handle", kicker: "Question 1", title: "What should this agent be called?" },
+  { key: "domain", kicker: "Question 2", title: "Who should control its ENS identity?" },
+  { key: "owner", kicker: "Question 3", title: "Which wallet is creating this agent?" },
+  { key: "description", kicker: "Question 4", title: "What is this agent supposed to do?" },
+  { key: "budget", kicker: "Question 5", title: "What budget should it get?" },
+  { key: "recipients", kicker: "Question 6", title: "Which wallets can it pay?" },
+  { key: "permissions", kicker: "Question 7", title: "What permissions should it have?" },
+  { key: "review", kicker: "Final Review", title: "Review everything before launch" },
+];
+
+const JOB_STEP_LABELS = {
+  wallet: "Create BitGo wallet",
+  erc8004: "Register ERC-8004 identity",
+  policy: "Publish policy and metadata",
+  ens: "Bind ENS records",
+  finalize: "Finalize and persist agent",
 };
 
 function sanitizeHandle(value) {
@@ -27,16 +49,16 @@ function sanitizeHandle(value) {
     .replace(/--+/g, "-");
 }
 
-function splitCsv(value) {
+function splitEntries(value) {
   return value
-    .split(",")
+    .split(/[\n,\s]+/)
     .map((entry) => entry.trim())
     .filter(Boolean);
 }
 
 function formatMoney(value) {
   if (!value || Number.isNaN(Number(value))) {
-    return "$0.00";
+    return "$0";
   }
 
   return new Intl.NumberFormat("en-US", {
@@ -47,28 +69,104 @@ function formatMoney(value) {
   }).format(Number(value));
 }
 
-function parseRecipientInput(value) {
-  return value
-    .split(/[\n,\s]+/)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+function labelForMulti(values) {
+  if (!values.length) {
+    return "Choose";
+  }
+  if (values.length === 1) {
+    return values[0];
+  }
+  return `${values.length} selected`;
+}
+
+function isValidAddress(value) {
+  return /^0x[a-fA-F0-9]{40}$/.test(value);
+}
+
+function shortenAddress(value) {
+  if (!value) {
+    return "Not connected";
+  }
+
+  return `${value.slice(0, 6)}...${value.slice(-4)}`;
+}
+
+function getWalletProvider() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  return window.ethereum ?? null;
+}
+
+function DropdownMenu({
+  label,
+  open,
+  onToggle,
+  children,
+}) {
+  return (
+    <div className={`wizard-dropdown${open ? " open" : ""}`}>
+      <button type="button" className="wizard-dropdown-trigger" onClick={onToggle}>
+        <span>{label}</span>
+        <span className="wizard-dropdown-caret">{open ? "Close" : "Select"}</span>
+      </button>
+      {open && <div className="wizard-dropdown-panel">{children}</div>}
+    </div>
+  );
+}
+
+function StepPill({ index, step, active, complete }) {
+  return (
+    <div className={`wizard-step-pill${active ? " active" : ""}${complete ? " complete" : ""}`}>
+      <span className="wizard-step-pill-index">{complete ? "Done" : index + 1}</span>
+      <span>{step.title}</span>
+    </div>
+  );
 }
 
 export default function AgentRegistration() {
-  const [form, setForm] = useState(DEFAULT_FORM);
-  const [allowedRecipients, setAllowedRecipients] = useState([]);
-  const [recipientInput, setRecipientInput] = useState("");
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [result, setResult] = useState(null);
+  const [currentStep, setCurrentStep] = useState(0);
+  const [domainOptions, setDomainOptions] = useState(DEFAULT_DOMAIN_OPTIONS);
+  const [tokenOptions, setTokenOptions] = useState(DEFAULT_TOKEN_OPTIONS);
+  const [chainOptions, setChainOptions] = useState(DEFAULT_CHAIN_OPTIONS);
+  const [domainModes, setDomainModes] = useState(DEFAULT_DOMAIN_MODE_OPTIONS);
+  const [sdkReferences, setSdkReferences] = useState([]);
+  const [ensAppUrl, setEnsAppUrl] = useState("https://app.ens.domains");
+  const [signingAddress, setSigningAddress] = useState("");
+  const [supportsSelfOwnedDomainAutomation, setSupportsSelfOwnedDomainAutomation] = useState(false);
   const [readiness, setReadiness] = useState({
     loading: true,
     ready: false,
     missing: [],
-    sdkReferences: [],
     error: "",
   });
+  const [wallet, setWallet] = useState({
+    address: "",
+    status: "idle",
+    error: "",
+  });
+  const [form, setForm] = useState({
+    name: "",
+    domainMode: "managed",
+    selectedDomain: "vcrtcorp.eth",
+    customDomain: "",
+    description: "",
+    maxPerTxUsdc: "25",
+    dailyLimitUsdc: "100",
+    allowedRecipients: [],
+    allowedTokens: ["USDC"],
+    allowedChains: ["base-sepolia"],
+    timeRestricted: true,
+    startHour: "9",
+    endHour: "17",
+  });
+  const [recipientInput, setRecipientInput] = useState("");
+  const [error, setError] = useState("");
+  const [jobId, setJobId] = useState("");
+  const [job, setJob] = useState(null);
+  const [successResult, setSuccessResult] = useState(null);
+  const [openDropdown, setOpenDropdown] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -84,9 +182,20 @@ export default function AgentRegistration() {
           loading: false,
           ready: response.ready,
           missing: response.missing ?? [],
-          sdkReferences: response.sdkReferences ?? [],
           error: "",
         });
+        setDomainOptions(response.suggestedDomains?.length ? response.suggestedDomains : DEFAULT_DOMAIN_OPTIONS);
+        setTokenOptions(response.tokenOptions?.length ? response.tokenOptions : DEFAULT_TOKEN_OPTIONS);
+        setChainOptions(response.chainOptions?.length ? response.chainOptions : DEFAULT_CHAIN_OPTIONS);
+        setDomainModes(response.domainModes?.length ? response.domainModes : DEFAULT_DOMAIN_MODE_OPTIONS);
+        setSdkReferences(response.sdkReferences ?? []);
+        setEnsAppUrl(response.ensAppUrl ?? "https://app.ens.domains");
+        setSigningAddress(response.signingAddress ?? "");
+        setSupportsSelfOwnedDomainAutomation(Boolean(response.supportsSelfOwnedDomainAutomation));
+        setForm((current) => ({
+          ...current,
+          selectedDomain: response.suggestedDomains?.[0] ?? current.selectedDomain,
+        }));
       } catch (readinessError) {
         if (!active) {
           return;
@@ -96,7 +205,6 @@ export default function AgentRegistration() {
           loading: false,
           ready: false,
           missing: [],
-          sdkReferences: [],
           error: readinessError.message,
         });
       }
@@ -109,12 +217,112 @@ export default function AgentRegistration() {
     };
   }, []);
 
-  const ensPreview =
-    form.name && form.baseDomain ? `${form.name}.${form.baseDomain}` : "agent-name.base.eth";
+  useEffect(() => {
+    const provider = getWalletProvider();
+    if (!provider) {
+      return undefined;
+    }
 
-  const hoursConfigured = form.startHour !== "" || form.endHour !== "";
+    let active = true;
+
+    async function syncExistingWallet() {
+      try {
+        const accounts = await provider.request({ method: "eth_accounts" });
+        if (!active || !Array.isArray(accounts)) {
+          return;
+        }
+
+        setWallet((current) => ({
+          ...current,
+          address: accounts[0] ?? "",
+          status: accounts[0] ? "connected" : "idle",
+          error: "",
+        }));
+      } catch (walletError) {
+        if (!active) {
+          return;
+        }
+
+        setWallet((current) => ({
+          ...current,
+          status: "error",
+          error: walletError.message,
+        }));
+      }
+    }
+
+    function handleAccountsChanged(accounts) {
+      if (!active) {
+        return;
+      }
+
+      setWallet({
+        address: accounts?.[0] ?? "",
+        status: accounts?.[0] ? "connected" : "idle",
+        error: "",
+      });
+    }
+
+    syncExistingWallet();
+    provider.on?.("accountsChanged", handleAccountsChanged);
+
+    return () => {
+      active = false;
+      provider.removeListener?.("accountsChanged", handleAccountsChanged);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!jobId || successResult) {
+      return undefined;
+    }
+
+    let active = true;
+
+    async function refreshJob() {
+      try {
+        const response = await vcr.getRegistrationJob(jobId);
+        if (!active) {
+          return;
+        }
+
+        setJob(response);
+        if (response.status === "succeeded") {
+          setSuccessResult(response.result);
+        }
+        if (response.status === "failed") {
+          setError(response.error || "Agent creation failed");
+        }
+      } catch (jobError) {
+        if (!active) {
+          return;
+        }
+
+        setError(jobError.message);
+      }
+    }
+
+    refreshJob();
+    const timer = setInterval(refreshJob, 1500);
+
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [jobId, successResult]);
+
+  const effectiveDomain =
+    form.domainMode === "managed"
+      ? form.selectedDomain
+      : form.customDomain.trim().toLowerCase();
+
+  const ensPreview =
+    form.name && effectiveDomain
+      ? `${form.name}.${effectiveDomain}`
+      : "agent-name.vcrtcorp.eth";
+
   const hoursValid =
-    !hoursConfigured ||
+    !form.timeRestricted ||
     (form.startHour !== "" &&
       form.endHour !== "" &&
       Number(form.startHour) >= 0 &&
@@ -122,504 +330,962 @@ export default function AgentRegistration() {
       Number(form.endHour) > Number(form.startHour) &&
       Number(form.endHour) <= 24);
 
-  const canSubmit =
-    readiness.ready &&
-    form.name &&
-    form.baseDomain &&
-    form.maxPerTxUsdc &&
-    form.dailyLimitUsdc &&
-    Number(form.maxPerTxUsdc) > 0 &&
-    Number(form.dailyLimitUsdc) >= Number(form.maxPerTxUsdc) &&
-    allowedRecipients.length > 0 &&
-    hoursValid &&
-    !loading;
+  const selfOwnedUnavailable = form.domainMode === "self-owned" && !supportsSelfOwnedDomainAutomation;
 
-  const updateField = (key, value) => {
+  const reviewPayload = {
+    name: form.name,
+    baseDomain: effectiveDomain,
+    description: form.description.trim() || undefined,
+    maxPerTxUsdc: form.maxPerTxUsdc.trim(),
+    dailyLimitUsdc: form.dailyLimitUsdc.trim(),
+    allowedRecipients: form.allowedRecipients,
+    allowedTokens: form.allowedTokens,
+    allowedChains: form.allowedChains,
+    creatorAddress: wallet.address,
+    domainMode: form.domainMode,
+    ...(form.timeRestricted
+      ? {
+          allowedHours: [Number(form.startHour), Number(form.endHour)],
+        }
+      : {}),
+  };
+
+  const isStepValid = () => {
+    const step = FLOW_STEPS[currentStep]?.key;
+
+    if (step === "handle") {
+      return Boolean(form.name);
+    }
+    if (step === "domain") {
+      if (form.domainMode === "managed") {
+        return Boolean(form.selectedDomain);
+      }
+      return Boolean(effectiveDomain) && effectiveDomain.includes(".");
+    }
+    if (step === "owner") {
+      return Boolean(wallet.address);
+    }
+    if (step === "description") {
+      return Boolean(form.description.trim());
+    }
+    if (step === "budget") {
+      return (
+        Boolean(form.maxPerTxUsdc) &&
+        Boolean(form.dailyLimitUsdc) &&
+        Number(form.maxPerTxUsdc) > 0 &&
+        Number(form.dailyLimitUsdc) >= Number(form.maxPerTxUsdc)
+      );
+    }
+    if (step === "recipients") {
+      return form.allowedRecipients.length > 0;
+    }
+    if (step === "permissions") {
+      return form.allowedTokens.length > 0 && form.allowedChains.length > 0 && hoursValid;
+    }
+    if (step === "review") {
+      return readiness.ready && hoursValid && Boolean(wallet.address);
+    }
+
+    return false;
+  };
+
+  const updateField = (field, value) => {
     setForm((current) => ({
       ...current,
-      [key]:
-        key === "name"
+      [field]:
+        field === "name"
           ? sanitizeHandle(value)
-          : key === "baseDomain"
-            ? value.trim().toLowerCase()
+          : field === "customDomain"
+            ? value.toLowerCase()
             : value,
     }));
   };
 
-  const commitRecipients = () => {
-    const parsed = parseRecipientInput(recipientInput);
-    if (!parsed.length) {
+  const toggleMultiValue = (field, value) => {
+    setForm((current) => {
+      const values = current[field];
+      return {
+        ...current,
+        [field]: values.includes(value)
+          ? values.filter((entry) => entry !== value)
+          : [...values, value],
+      };
+    });
+  };
+
+  const addRecipients = () => {
+    const entries = splitEntries(recipientInput);
+    if (!entries.length) {
       return;
     }
 
-    const invalid = parsed.find((entry) => !/^0x[a-fA-F0-9]{40}$/.test(entry));
+    const invalid = entries.find((entry) => !isValidAddress(entry));
     if (invalid) {
       setError(`Recipient address is invalid: ${invalid}`);
       return;
     }
 
-    setAllowedRecipients((current) => [...new Set([...current, ...parsed])]);
+    setForm((current) => ({
+      ...current,
+      allowedRecipients: [...new Set([...current.allowedRecipients, ...entries])],
+    }));
     setRecipientInput("");
     setError("");
   };
 
   const removeRecipient = (recipient) => {
-    setAllowedRecipients((current) => current.filter((entry) => entry !== recipient));
+    setForm((current) => ({
+      ...current,
+      allowedRecipients: current.allowedRecipients.filter((entry) => entry !== recipient),
+    }));
+  };
+
+  const connectWallet = async () => {
+    const provider = getWalletProvider();
+    if (!provider) {
+      setWallet({
+        address: "",
+        status: "error",
+        error: "Install a wallet like MetaMask to continue.",
+      });
+      return;
+    }
+
+    setWallet((current) => ({
+      ...current,
+      status: "connecting",
+      error: "",
+    }));
+
+    try {
+      const accounts = await provider.request({ method: "eth_requestAccounts" });
+      const address = Array.isArray(accounts) ? (accounts[0] ?? "") : "";
+
+      if (!address) {
+        throw new Error("No wallet account was returned.");
+      }
+
+      setWallet({
+        address,
+        status: "connected",
+        error: "",
+      });
+      setError("");
+    } catch (walletError) {
+      setWallet({
+        address: "",
+        status: "error",
+        error: walletError.message,
+      });
+    }
   };
 
   const fillDemo = () => {
     setForm({
       name: "researcher-001",
-      baseDomain: "acmecorp.eth",
-      description: "Research agent with a small supervised USDC budget.",
+      domainMode: "managed",
+      selectedDomain: "vcrtcorp.eth",
+      customDomain: "",
+      description: "Research agent with a supervised spend policy for external services.",
       maxPerTxUsdc: "25",
       dailyLimitUsdc: "100",
-      allowedTokens: "USDC",
-      allowedChains: "base-sepolia",
+      allowedRecipients: DEMO_RECIPIENTS,
+      allowedTokens: ["USDC"],
+      allowedChains: ["base-sepolia"],
+      timeRestricted: true,
       startHour: "9",
       endHour: "17",
     });
-    setAllowedRecipients(DEMO_RECIPIENTS);
-    setShowAdvanced(true);
+    setCurrentStep(0);
     setError("");
-    setResult(null);
+    setSuccessResult(null);
+    setJobId("");
+    setJob(null);
   };
 
-  const resetForm = () => {
-    setForm(DEFAULT_FORM);
-    setAllowedRecipients([]);
+  const resetAll = () => {
+    setForm({
+      name: "",
+      domainMode: "managed",
+      selectedDomain: domainOptions[0] ?? "vcrtcorp.eth",
+      customDomain: "",
+      description: "",
+      maxPerTxUsdc: "25",
+      dailyLimitUsdc: "100",
+      allowedRecipients: [],
+      allowedTokens: ["USDC"],
+      allowedChains: ["base-sepolia"],
+      timeRestricted: true,
+      startHour: "9",
+      endHour: "17",
+    });
     setRecipientInput("");
-    setShowAdvanced(false);
-    setLoading(false);
+    setCurrentStep(0);
     setError("");
-    setResult(null);
+    setJobId("");
+    setJob(null);
+    setSuccessResult(null);
+    setOpenDropdown("");
   };
 
   const submit = async () => {
-    setLoading(true);
     setError("");
 
-    try {
-      const payload = {
-        name: form.name,
-        baseDomain: form.baseDomain,
-        description: form.description.trim() || undefined,
-        maxPerTxUsdc: form.maxPerTxUsdc.trim(),
-        dailyLimitUsdc: form.dailyLimitUsdc.trim(),
-        allowedRecipients,
-        allowedTokens: splitCsv(form.allowedTokens),
-        allowedChains: splitCsv(form.allowedChains),
-        ...(hoursConfigured
-          ? {
-              allowedHours: [
-                Number(form.startHour),
-                Number(form.endHour),
-              ],
-            }
-          : {}),
-      };
+    if (selfOwnedUnavailable) {
+      setError("Self-owned ENS domains currently need to be completed from ENS App with your connected wallet.");
+      return;
+    }
 
-      const response = await vcr.registerAgent(payload);
-      setResult(response);
+    try {
+      const response = await vcr.startRegistrationJob(reviewPayload);
+      setJobId(response.jobId);
+      setJob({
+        status: response.status,
+        steps: Object.entries(JOB_STEP_LABELS).map(([key, label]) => ({
+          key,
+          label,
+          status: key === "wallet" ? "active" : "pending",
+        })),
+        logs: [],
+      });
     } catch (submitError) {
       setError(submitError.message);
-    } finally {
-      setLoading(false);
     }
   };
 
-  const record = result?.record;
-  const sdkReferences = result?.sdkReferences ?? readiness.sdkReferences;
+  const renderCurrentStep = () => {
+    const step = FLOW_STEPS[currentStep]?.key;
+
+    if (step === "handle") {
+      return (
+        <div className="wizard-question-card">
+          <label className="wizard-label">Agent handle</label>
+          <input
+            className="wizard-input mono"
+            value={form.name}
+            onChange={(event) => updateField("name", event.target.value)}
+            placeholder="researcher-001"
+          />
+          <p className="wizard-help">
+            This becomes the ENS subname and the saved agent record name.
+          </p>
+        </div>
+      );
+    }
+
+    if (step === "domain") {
+      return (
+        <div className="wizard-question-card">
+          <label className="wizard-label">Registration path</label>
+          <div className="wizard-mode-grid">
+            {domainModes.map((mode) => (
+              <button
+                key={mode.id}
+                type="button"
+                className={`wizard-mode-card${form.domainMode === mode.id ? " active" : ""}`}
+                onClick={() => {
+                  setForm((current) => ({
+                    ...current,
+                    domainMode: mode.id,
+                    selectedDomain:
+                      mode.id === "managed"
+                        ? domainOptions[0] ?? current.selectedDomain
+                        : current.selectedDomain,
+                  }));
+                  setError("");
+                }}
+              >
+                <strong>{mode.label}</strong>
+                <span>{mode.description}</span>
+              </button>
+            ))}
+          </div>
+
+          {form.domainMode === "managed" ? (
+            <>
+              <label className="wizard-label wizard-section-label">Managed ENS domain</label>
+              <DropdownMenu
+                label={effectiveDomain || "Choose domain"}
+                open={openDropdown === "domain"}
+                onToggle={() => setOpenDropdown((current) => current === "domain" ? "" : "domain")}
+              >
+                {domainOptions.map((domain) => (
+                  <button
+                    key={domain}
+                    type="button"
+                    className={`wizard-option${form.selectedDomain === domain ? " active" : ""}`}
+                    onClick={() => {
+                      setForm((current) => ({ ...current, selectedDomain: domain }));
+                      setOpenDropdown("");
+                    }}
+                  >
+                    {domain}
+                  </button>
+                ))}
+              </DropdownMenu>
+              <p className="wizard-help">
+                Managed mode is fully automated. The backend signer creates the subname and pays the Sepolia ENS write gas.
+              </p>
+            </>
+          ) : (
+            <div className="wizard-stack">
+              <label className="wizard-label wizard-section-label">Your ENS domain</label>
+              <input
+                className="wizard-input mono"
+                value={form.customDomain}
+                onChange={(event) => updateField("customDomain", event.target.value)}
+                placeholder="your-domain.eth"
+              />
+              <div className="alert alert-info">
+                Self-owned mode records your wallet as the creator. ENS registration fees and ENS writes come from your connected wallet, not the backend.
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    if (step === "owner") {
+      return (
+        <div className="wizard-question-card">
+          <div className="wizard-owner-card">
+            <div>
+              <label className="wizard-label">Creator wallet</label>
+              <p className="wizard-help wizard-help-tight">
+                Connect the wallet that should be recorded as the human creator of this agent.
+              </p>
+            </div>
+
+            <button type="button" className="btn btn-primary" onClick={connectWallet}>
+              {wallet.status === "connecting"
+                ? "Connecting..."
+                : wallet.address
+                  ? "Reconnect wallet"
+                  : "Connect wallet"}
+            </button>
+          </div>
+
+          <div className="wizard-wallet-panel">
+            <div className="wizard-wallet-row">
+              <span>Connected wallet</span>
+              <strong className="mono">{wallet.address || "No wallet connected"}</strong>
+            </div>
+            {signingAddress && (
+              <div className="wizard-wallet-row">
+                <span>Backend signer</span>
+                <strong className="mono">{signingAddress}</strong>
+              </div>
+            )}
+            <div className="wizard-wallet-row">
+              <span>Fee responsibility</span>
+              <strong>
+                {form.domainMode === "managed"
+                  ? "Backend pays Sepolia ENS write gas for managed subdomains."
+                  : "Your connected wallet pays ENS registration and ENS write gas."}
+              </strong>
+            </div>
+          </div>
+
+          {wallet.error && <div className="alert alert-error">{wallet.error}</div>}
+          {form.domainMode === "self-owned" ? (
+            <div className="alert alert-warning">
+              Use the wallet that owns this domain or the wallet you want to use to register it in ENS App.
+            </div>
+          ) : (
+            <div className="alert alert-info">
+              The backend signer completes the managed ENS write, but this wallet is still stored as the creator for auditability.
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    if (step === "description") {
+      return (
+        <div className="wizard-question-card">
+          <label className="wizard-label">Description</label>
+          <textarea
+            className="wizard-textarea"
+            rows="5"
+            value={form.description}
+            onChange={(event) => updateField("description", event.target.value)}
+            placeholder="Research budget agent for paid API calls, retrieval, and supervised experimentation."
+          />
+        </div>
+      );
+    }
+
+    if (step === "budget") {
+      return (
+        <div className="wizard-question-card wizard-budget-grid">
+          <div>
+            <label className="wizard-label">Max per payment</label>
+            <input
+              className="wizard-input mono"
+              inputMode="decimal"
+              value={form.maxPerTxUsdc}
+              onChange={(event) => updateField("maxPerTxUsdc", event.target.value)}
+            />
+            <p className="wizard-inline-value">{formatMoney(form.maxPerTxUsdc)}</p>
+          </div>
+          <div>
+            <label className="wizard-label">Daily limit</label>
+            <input
+              className="wizard-input mono"
+              inputMode="decimal"
+              value={form.dailyLimitUsdc}
+              onChange={(event) => updateField("dailyLimitUsdc", event.target.value)}
+            />
+            <p className="wizard-inline-value">{formatMoney(form.dailyLimitUsdc)}</p>
+          </div>
+          {Number(form.dailyLimitUsdc) < Number(form.maxPerTxUsdc) && (
+            <div className="alert alert-error">
+              Daily limit needs to be greater than or equal to the max payment amount.
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    if (step === "recipients") {
+      return (
+        <div className="wizard-question-card">
+          <label className="wizard-label">Allowed recipients</label>
+          <div className="wizard-recipient-row">
+            <textarea
+              className="wizard-textarea"
+              rows="4"
+              value={recipientInput}
+              onChange={(event) => setRecipientInput(event.target.value)}
+              placeholder="Paste one or more wallet addresses"
+            />
+            <button type="button" className="btn btn-primary" onClick={addRecipients}>
+              Add
+            </button>
+          </div>
+          <div className="wizard-chip-grid">
+            {form.allowedRecipients.length === 0 ? (
+              <span className="wizard-empty-state">No recipients added yet</span>
+            ) : (
+              form.allowedRecipients.map((recipient) => (
+                <button
+                  key={recipient}
+                  type="button"
+                  className="wizard-chip"
+                  onClick={() => removeRecipient(recipient)}
+                >
+                  <span>{recipient}</span>
+                  <span className="wizard-chip-action">Remove</span>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    if (step === "permissions") {
+      return (
+        <div className="wizard-question-card">
+          <div className="wizard-permission-grid">
+            <div>
+              <label className="wizard-label">Allowed tokens</label>
+              <DropdownMenu
+                label={labelForMulti(form.allowedTokens)}
+                open={openDropdown === "tokens"}
+                onToggle={() => setOpenDropdown((current) => current === "tokens" ? "" : "tokens")}
+              >
+                {tokenOptions.map((token) => (
+                  <button
+                    key={token}
+                    type="button"
+                    className={`wizard-option${form.allowedTokens.includes(token) ? " active" : ""}`}
+                    onClick={() => toggleMultiValue("allowedTokens", token)}
+                  >
+                    {token}
+                  </button>
+                ))}
+              </DropdownMenu>
+            </div>
+
+            <div>
+              <label className="wizard-label">Allowed chains</label>
+              <DropdownMenu
+                label={labelForMulti(form.allowedChains)}
+                open={openDropdown === "chains"}
+                onToggle={() => setOpenDropdown((current) => current === "chains" ? "" : "chains")}
+              >
+                {chainOptions.map((chain) => (
+                  <button
+                    key={chain}
+                    type="button"
+                    className={`wizard-option${form.allowedChains.includes(chain) ? " active" : ""}`}
+                    onClick={() => toggleMultiValue("allowedChains", chain)}
+                  >
+                    {chain}
+                  </button>
+                ))}
+              </DropdownMenu>
+            </div>
+          </div>
+
+          <div className="wizard-time-window">
+            <label className="wizard-toggle-row">
+              <input
+                type="checkbox"
+                checked={form.timeRestricted}
+                onChange={(event) => updateField("timeRestricted", event.target.checked)}
+              />
+              <span>Restrict payments to a UTC time window</span>
+            </label>
+
+            {form.timeRestricted && (
+              <div className="wizard-budget-grid">
+                <div>
+                  <label className="wizard-label">From hour (UTC)</label>
+                  <input
+                    className="wizard-input mono"
+                    value={form.startHour}
+                    onChange={(event) => updateField("startHour", event.target.value)}
+                    inputMode="numeric"
+                  />
+                </div>
+                <div>
+                  <label className="wizard-label">Until hour (UTC)</label>
+                  <input
+                    className="wizard-input mono"
+                    value={form.endHour}
+                    onChange={(event) => updateField("endHour", event.target.value)}
+                    inputMode="numeric"
+                  />
+                </div>
+              </div>
+            )}
+
+            {!hoursValid && (
+              <div className="alert alert-error">
+                Use a valid UTC window like 9 to 17.
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="wizard-review-card">
+        <div className="wizard-review-grid">
+          <div className="wizard-review-item">
+            <span>ENS address</span>
+            <strong className="mono">{ensPreview}</strong>
+          </div>
+          <div className="wizard-review-item">
+            <span>Domain mode</span>
+            <strong>{form.domainMode === "managed" ? "Managed by VCR" : "Self-owned ENS"}</strong>
+          </div>
+          <div className="wizard-review-item">
+            <span>Creator wallet</span>
+            <strong className="mono">{wallet.address}</strong>
+          </div>
+          <div className="wizard-review-item">
+            <span>Backend signer</span>
+            <strong className="mono">{signingAddress || "Configured on server"}</strong>
+          </div>
+          <div className="wizard-review-item">
+            <span>Description</span>
+            <strong>{form.description}</strong>
+          </div>
+          <div className="wizard-review-item">
+            <span>Max per payment</span>
+            <strong>{formatMoney(form.maxPerTxUsdc)}</strong>
+          </div>
+          <div className="wizard-review-item">
+            <span>Daily limit</span>
+            <strong>{formatMoney(form.dailyLimitUsdc)}</strong>
+          </div>
+          <div className="wizard-review-item">
+            <span>Fee responsibility</span>
+            <strong>
+              {form.domainMode === "managed"
+                ? "Backend signer pays Sepolia ENS write gas."
+                : "Connected wallet pays ENS registration and ENS write gas."}
+            </strong>
+          </div>
+          <div className="wizard-review-item">
+            <span>Allowed tokens</span>
+            <strong className="mono">{form.allowedTokens.join(", ")}</strong>
+          </div>
+          <div className="wizard-review-item">
+            <span>Allowed chains</span>
+            <strong className="mono">{form.allowedChains.join(", ")}</strong>
+          </div>
+          <div className="wizard-review-item wide">
+            <span>Allowed recipients</span>
+            <div className="wizard-review-tags">
+              {form.allowedRecipients.map((recipient) => (
+                <code key={recipient} className="wizard-review-tag">
+                  {recipient}
+                </code>
+              ))}
+            </div>
+          </div>
+          <div className="wizard-review-item wide">
+            <span>Hours</span>
+            <strong className="mono">
+              {form.timeRestricted
+                ? `${form.startHour}:00 to ${form.endHour}:00 UTC`
+                : "No time restriction"}
+            </strong>
+          </div>
+        </div>
+
+        {selfOwnedUnavailable && (
+          <div className="wizard-review-callout">
+            <div className="alert alert-warning">
+              Self-owned ENS is not yet automated end-to-end from this server. Use your connected wallet in ENS App to register or manage the domain and pay ENS gas there.
+            </div>
+            <div className="wizard-actions">
+              <a href={ensAppUrl} target="_blank" rel="noreferrer" className="btn btn-primary">
+                Open ENS App
+              </a>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => {
+                  setForm((current) => ({
+                    ...current,
+                    domainMode: "managed",
+                    selectedDomain: domainOptions[0] ?? "vcrtcorp.eth",
+                  }));
+                  setCurrentStep(1);
+                }}
+              >
+                Switch to managed domain
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="wizard-reference-strip">
+          {sdkReferences.map((reference) => (
+            <code key={reference} className="wizard-reference-pill">
+              {reference}
+            </code>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  const showProgress = Boolean(jobId) && !successResult;
+  const currentConfigStep = FLOW_STEPS[currentStep];
 
   return (
-    <div className="page register-shell">
+    <div className="page wizard-shell">
       <div className="container">
-        <div className="register-hero">
+        <div className="wizard-hero">
           <div>
-            <div className="badge badge-blue" style={{ marginBottom: 16 }}>
-              No-code agent launch
+            <div className="badge badge-blue" style={{ marginBottom: 14 }}>
+              Guided agent launch
             </div>
-            <h1>Launch a VCR agent in one flow.</h1>
+            <h1>Set up one agent, one decision at a time.</h1>
             <p>
-              This screen wraps the SDK&apos;s full lifecycle so you can create a
-              BitGo wallet, register ERC-8004, publish the VCR policy, and bind
-              ENSIP-25 without hand-writing JSON.
+              The frontend now captures the creator wallet, explains ENS fee responsibility, and keeps the live SDK-backed launch flow visible while the backend works.
             </p>
           </div>
 
-          <div className="register-status-card">
-            <span className={`register-status-dot${readiness.ready ? " ready" : ""}`} />
-            <div>
-              <strong>
-                {readiness.loading
-                  ? "Checking backend setup..."
+          <div className="wizard-status-card">
+            <strong>
+              {readiness.loading
+                ? "Checking backend setup..."
+                : readiness.ready
+                  ? "Backend is ready to create agents"
+                  : "Backend setup needs attention"}
+            </strong>
+            <p>
+              {readiness.loading
+                ? "Loading domains, token options, and SDK readiness."
+                : readiness.error
+                  ? readiness.error
                   : readiness.ready
-                    ? "Server is ready for SDK-backed registration"
-                    : "Backend setup needs attention"}
-              </strong>
-              <p>
-                {readiness.loading
-                  ? "Verifying the server has the required SDK environment."
-                  : readiness.error
-                    ? readiness.error
-                    : readiness.ready
-                      ? "The frontend can call the local SDK flow directly through the API."
-                      : "Missing environment variables will block createAgent()."}
-              </p>
+                    ? "Managed domains are ready for one-click creation from the frontend."
+                    : `Missing environment: ${readiness.missing.join(", ")}`}
+            </p>
+            <div className="wizard-status-meta">
+              <div className="wizard-status-meta-row">
+                <span>Creator wallet</span>
+                <strong className="mono">{shortenAddress(wallet.address)}</strong>
+              </div>
+              {signingAddress && (
+                <div className="wizard-status-meta-row">
+                  <span>Backend signer</span>
+                  <strong className="mono">{shortenAddress(signingAddress)}</strong>
+                </div>
+              )}
             </div>
           </div>
         </div>
 
-        {!readiness.loading && !readiness.ready && readiness.missing.length > 0 && (
-          <div className="alert alert-error">
-            Missing environment: {readiness.missing.join(", ")}
-          </div>
-        )}
-
         {error && <div className="alert alert-error">{error}</div>}
 
-        {!result && (
-          <div className="register-layout">
-            <div className="card register-form-card">
-              <div className="register-card-header">
-                <div>
-                  <h2>CreateAgentConfig</h2>
-                  <p>
-                    These fields map directly to the SDK&apos;s
-                    `createAgent(config, env)` flow.
-                  </p>
-                </div>
-                <button className="btn btn-ghost" type="button" onClick={fillDemo}>
-                  Use demo values
-                </button>
-              </div>
-
-              <div className="field-grid">
-                <div className="form-group">
-                  <label className="form-label">Agent handle</label>
-                  <input
-                    className="form-input mono"
-                    value={form.name}
-                    onChange={(event) => updateField("name", event.target.value)}
-                    placeholder="researcher-001"
-                  />
-                  <p className="field-help">
-                    Lowercase letters, numbers, and hyphens only. This becomes the
-                    ENS subname and local agent filename.
-                  </p>
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">Base ENS domain</label>
-                  <input
-                    className="form-input mono"
-                    value={form.baseDomain}
-                    onChange={(event) => updateField("baseDomain", event.target.value)}
-                    placeholder="acmecorp.eth"
-                  />
-                  <p className="field-help">
-                    The owner wallet on the server must control this domain.
-                  </p>
-                </div>
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">What this agent does</label>
-                <textarea
-                  className="form-textarea"
-                  rows="4"
-                  value={form.description}
-                  onChange={(event) => updateField("description", event.target.value)}
-                  placeholder="Research budget agent for paid API calls and retrieval."
-                />
-              </div>
-
-              <div className="field-grid">
-                <div className="form-group">
-                  <label className="form-label">Max per payment (USDC)</label>
-                  <input
-                    className="form-input mono"
-                    inputMode="decimal"
-                    value={form.maxPerTxUsdc}
-                    onChange={(event) => updateField("maxPerTxUsdc", event.target.value)}
-                    placeholder="25"
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">Daily limit (USDC)</label>
-                  <input
-                    className="form-input mono"
-                    inputMode="decimal"
-                    value={form.dailyLimitUsdc}
-                    onChange={(event) => updateField("dailyLimitUsdc", event.target.value)}
-                    placeholder="100"
-                  />
-                </div>
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">Allowed recipients</label>
-                <div className="recipient-composer">
-                  <textarea
-                    className="form-textarea"
-                    rows="3"
-                    value={recipientInput}
-                    onChange={(event) => setRecipientInput(event.target.value)}
-                    placeholder="Paste one or more wallet addresses"
-                  />
-                  <button
-                    className="btn btn-primary"
-                    type="button"
-                    onClick={commitRecipients}
-                  >
-                    Add recipient
+        {!showProgress && (
+          <div className="wizard-layout">
+            <aside className="wizard-sidebar">
+              <div className="card wizard-sidebar-card">
+                <div className="wizard-sidebar-header">
+                  <span className="badge badge-gray">Progress</span>
+                  <button type="button" className="btn btn-ghost" onClick={fillDemo}>
+                    Demo values
                   </button>
                 </div>
-                <p className="field-help">
-                  Recipients are locked into the BitGo wallet policy after the
-                  48-hour window, so add every destination you need up front.
-                </p>
+                <div className="wizard-step-list">
+                  {FLOW_STEPS.map((step, index) => (
+                    <StepPill
+                      key={step.key}
+                      index={index}
+                      step={step}
+                      active={index === currentStep}
+                      complete={index < currentStep}
+                    />
+                  ))}
+                </div>
 
-                <div className="chip-list">
-                  {allowedRecipients.length === 0 ? (
-                    <span className="empty-chip">No recipients added yet</span>
-                  ) : (
-                    allowedRecipients.map((recipient) => (
-                      <button
-                        key={recipient}
-                        type="button"
-                        className="recipient-chip"
-                        onClick={() => removeRecipient(recipient)}
-                      >
-                        <span>{recipient}</span>
-                        <span className="recipient-chip-x">remove</span>
-                      </button>
-                    ))
-                  )}
+                <div className="wizard-sidebar-summary">
+                  <span className="wizard-sidebar-summary-label">ENS preview</span>
+                  <strong className="mono">{ensPreview}</strong>
+                </div>
+                <div className="wizard-sidebar-summary">
+                  <span className="wizard-sidebar-summary-label">Creator wallet</span>
+                  <strong className="mono">{wallet.address || "Connect in step 3"}</strong>
+                </div>
+                <div className="wizard-sidebar-summary">
+                  <span className="wizard-sidebar-summary-label">Fee model</span>
+                  <strong>
+                    {form.domainMode === "managed"
+                      ? "Backend signer covers ENS writes"
+                      : "Connected wallet covers ENS gas"}
+                  </strong>
                 </div>
               </div>
+            </aside>
 
-              <button
-                type="button"
-                className="register-toggle"
-                onClick={() => setShowAdvanced((current) => !current)}
-              >
-                {showAdvanced ? "Hide advanced policy options" : "Show advanced policy options"}
-              </button>
+            <section className="card wizard-main-card">
+              <div className="wizard-main-header">
+                <div>
+                  <span className="badge badge-purple">{currentConfigStep.kicker}</span>
+                  <h2>{currentConfigStep.title}</h2>
+                </div>
+                <p className="wizard-step-counter">
+                  Step {currentStep + 1} of {FLOW_STEPS.length}
+                </p>
+              </div>
 
-              {showAdvanced && (
-                <div className="advanced-grid">
-                  <div className="form-group">
-                    <label className="form-label">Allowed tokens</label>
-                    <input
-                      className="form-input mono"
-                      value={form.allowedTokens}
-                      onChange={(event) => updateField("allowedTokens", event.target.value)}
-                      placeholder="USDC"
-                    />
-                    <p className="field-help">Comma-separated. `USDC` is the default.</p>
-                  </div>
+              {renderCurrentStep()}
 
-                  <div className="form-group">
-                    <label className="form-label">Allowed chains</label>
-                    <input
-                      className="form-input mono"
-                      value={form.allowedChains}
-                      onChange={(event) => updateField("allowedChains", event.target.value)}
-                      placeholder="base-sepolia"
-                    />
-                    <p className="field-help">
-                      Comma-separated chain names from the SDK policy.
-                    </p>
-                  </div>
+              <div className="wizard-actions">
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => setCurrentStep((current) => Math.max(0, current - 1))}
+                  disabled={currentStep === 0}
+                >
+                  Back
+                </button>
+                {currentStep < FLOW_STEPS.length - 1 ? (
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => {
+                      if (!isStepValid()) {
+                        setError("Please complete this step before continuing.");
+                        return;
+                      }
+                      setError("");
+                      setCurrentStep((current) => current + 1);
+                    }}
+                    disabled={!readiness.ready}
+                  >
+                    Continue
+                  </button>
+                ) : selfOwnedUnavailable ? (
+                  <a href={ensAppUrl} target="_blank" rel="noreferrer" className="btn btn-primary">
+                    Open ENS App
+                  </a>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={submit}
+                    disabled={!isStepValid() || !readiness.ready}
+                  >
+                    Create agent
+                  </button>
+                )}
+              </div>
+            </section>
+          </div>
+        )}
 
-                  <div className="field-grid">
-                    <div className="form-group">
-                      <label className="form-label">Allowed from hour (UTC)</label>
-                      <input
-                        className="form-input mono"
-                        inputMode="numeric"
-                        value={form.startHour}
-                        onChange={(event) => updateField("startHour", event.target.value)}
-                        placeholder="9"
-                      />
+        {showProgress && (
+          <div className="wizard-progress-layout">
+            <div className="card wizard-progress-card">
+              <div className="wizard-main-header">
+                <div>
+                  <span className="badge badge-blue">Creating agent</span>
+                  <h2>Live backend checklist</h2>
+                </div>
+                <p className="wizard-step-counter">
+                  {job?.status === "failed" ? "Needs attention" : "Running"}
+                </p>
+              </div>
+
+              <div className="wizard-job-steps">
+                {(job?.steps ?? []).map((step) => (
+                  <div key={step.key} className={`wizard-job-step ${step.status}`}>
+                    <span className="wizard-job-step-icon">
+                      {step.status === "completed"
+                        ? "Done"
+                        : step.status === "failed"
+                          ? "Stop"
+                          : step.status === "active"
+                            ? "Live"
+                            : "Next"}
+                    </span>
+                    <div>
+                      <strong>{step.label}</strong>
+                      <p>{step.status}</p>
                     </div>
-
-                    <div className="form-group">
-                      <label className="form-label">Allowed until hour (UTC)</label>
-                      <input
-                        className="form-input mono"
-                        inputMode="numeric"
-                        value={form.endHour}
-                        onChange={(event) => updateField("endHour", event.target.value)}
-                        placeholder="17"
-                      />
-                    </div>
                   </div>
+                ))}
+              </div>
 
-                  {!hoursValid && (
-                    <div className="alert alert-error">
-                      Allowed hours must be a valid UTC range like 9 to 17.
-                    </div>
-                  )}
+              {job?.status === "failed" && (
+                <div className="wizard-actions">
+                  <button type="button" className="btn btn-ghost" onClick={() => setJobId("")}>
+                    Back to review
+                  </button>
                 </div>
               )}
-
-              <div className="register-actions">
-                <button
-                  className="btn btn-primary"
-                  type="button"
-                  onClick={submit}
-                  disabled={!canSubmit}
-                >
-                  {loading ? "Creating agent..." : "Create agent"}
-                </button>
-                <button className="btn btn-ghost" type="button" onClick={resetForm}>
-                  Reset
-                </button>
-              </div>
             </div>
 
-            <div className="register-sidebar">
-              <div className="card register-summary-card">
-                <div className="card-header">
-                  <h2>Launch summary</h2>
-                  <p>What the SDK will create for this agent.</p>
+            <div className="card wizard-log-card">
+              <div className="wizard-main-header">
+                <div>
+                  <span className="badge badge-gray">Server log</span>
+                  <h2>What is happening right now</h2>
                 </div>
-
-                <div className="summary-stack">
-                  <div className="summary-row">
-                    <span>ENS name</span>
-                    <strong className="mono">{ensPreview}</strong>
-                  </div>
-                  <div className="summary-row">
-                    <span>Per payment</span>
-                    <strong>{formatMoney(form.maxPerTxUsdc)}</strong>
-                  </div>
-                  <div className="summary-row">
-                    <span>Daily budget</span>
-                    <strong>{formatMoney(form.dailyLimitUsdc)}</strong>
-                  </div>
-                  <div className="summary-row">
-                    <span>Recipients</span>
-                    <strong>{allowedRecipients.length}</strong>
-                  </div>
-                  <div className="summary-row">
-                    <span>Default chain</span>
-                    <strong className="mono">{splitCsv(form.allowedChains)[0] ?? "base-sepolia"}</strong>
-                  </div>
-                  <div className="summary-row">
-                    <span>Default token</span>
-                    <strong className="mono">{splitCsv(form.allowedTokens)[0] ?? "USDC"}</strong>
-                  </div>
-                </div>
+                <p className="wizard-step-counter">{job?.logs?.length ?? 0} events</p>
               </div>
 
-              <div className="card register-summary-card">
-                <div className="card-header">
-                  <h2>SDK references</h2>
-                  <p>The UI is intentionally wired to the local SDK, not duplicated logic.</p>
-                </div>
-
-                <div className="sdk-reference-list">
-                  {sdkReferences.length === 0 ? (
-                    <span className="empty-chip">SDK references load after readiness check</span>
-                  ) : (
-                    sdkReferences.map((reference) => (
-                      <code key={reference} className="sdk-reference-pill">
-                        {reference}
-                      </code>
-                    ))
-                  )}
-                </div>
-
-                <div className="launch-steps">
-                  <div className="launch-step">
-                    <strong>1.</strong>
-                    <span>Create BitGo wallet + policy hash</span>
+              <div className="wizard-log-stream">
+                {(job?.logs ?? []).map((entry) => (
+                  <div key={entry.id} className="wizard-log-line">
+                    <span className="wizard-log-time">
+                      {new Date(entry.timestamp).toLocaleTimeString()}
+                    </span>
+                    <code>{entry.message}</code>
                   </div>
-                  <div className="launch-step">
-                    <strong>2.</strong>
-                    <span>Register ERC-8004 agent on Sepolia</span>
-                  </div>
-                  <div className="launch-step">
-                    <strong>3.</strong>
-                    <span>Store policy via Fileverse / IPFS</span>
-                  </div>
-                  <div className="launch-step">
-                    <strong>4.</strong>
-                    <span>Set ENSIP-25 and `vcr.policy` records</span>
-                  </div>
-                </div>
+                ))}
               </div>
             </div>
           </div>
         )}
 
-        {record && (
-          <div className="card register-success-card">
-            <div className="register-success-header">
-              <div>
-                <div className="badge" style={{ marginBottom: 16, background: "var(--nb-ok)", color: "var(--nb-ink)" }}>
-                  Agent created
+        {successResult && (
+          <div className="wizard-success-overlay">
+            <div className="wizard-success-modal">
+              <div className="wizard-main-header">
+                <div>
+                  <span className="badge" style={{ background: "var(--nb-ok)", color: "var(--nb-ink)" }}>
+                    Agent created
+                  </span>
+                  <h2>{successResult.record.ensName}</h2>
                 </div>
-                <h2>{record.ensName}</h2>
-                <p>
-                  The SDK completed wallet creation, ERC-8004 registration,
-                  policy publishing, and ENS binding.
-                </p>
-              </div>
-
-              <div className="success-actions">
-                <a
-                  href={`https://sepolia.etherscan.io/tx/${record.registrationTx}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="btn btn-primary"
-                >
-                  View registration tx
-                </a>
-                <button className="btn btn-ghost" type="button" onClick={resetForm}>
-                  Create another
+                <button type="button" className="btn btn-ghost" onClick={resetAll}>
+                  Close
                 </button>
               </div>
-            </div>
 
-            <div className="success-grid">
-              <div className="success-item">
-                <span>Agent ID</span>
-                <strong>{record.agentId}</strong>
+              <div className="wizard-success-grid">
+                <div className="wizard-review-item">
+                  <span>ENS address</span>
+                  <strong className="mono">{successResult.record.ensName}</strong>
+                </div>
+                <div className="wizard-review-item">
+                  <span>Agent ID</span>
+                  <strong>{successResult.record.agentId}</strong>
+                </div>
+                <div className="wizard-review-item">
+                  <span>Wallet address</span>
+                  <strong className="mono">{successResult.record.walletAddress}</strong>
+                </div>
+                <div className="wizard-review-item">
+                  <span>Policy URI</span>
+                  <strong className="mono">{successResult.record.policyUri}</strong>
+                </div>
+                <div className="wizard-review-item">
+                  <span>Creator wallet</span>
+                  <strong className="mono">{successResult.ownership?.creatorAddress || wallet.address}</strong>
+                </div>
+                <div className="wizard-review-item">
+                  <span>Backend signer</span>
+                  <strong className="mono">{successResult.ownership?.signingAddress || signingAddress}</strong>
+                </div>
               </div>
-              <div className="success-item">
-                <span>BitGo wallet ID</span>
-                <strong className="mono">{record.walletId}</strong>
-              </div>
-              <div className="success-item">
-                <span>Wallet address</span>
-                <strong className="mono">{record.walletAddress}</strong>
-              </div>
-              <div className="success-item">
-                <span>Policy URI</span>
-                <strong className="mono">{record.policyUri}</strong>
-              </div>
-              <div className="success-item">
-                <span>Policy gateway</span>
-                <strong className="mono">{record.policyGatewayUrl ?? "Not returned"}</strong>
-              </div>
-              <div className="success-item">
-                <span>ENS tx</span>
-                <strong className="mono">{record.ensTx}</strong>
-              </div>
-            </div>
 
-            <div className="post-create-note">
-              <p>
-                The SDK also wrote local artifacts for this agent on the server
-                under `server/agents/{form.name}.json` and, when available,
-                `server/agents/{form.name}.key`.
-              </p>
-              <div className="register-actions">
+              <div className="wizard-success-links">
+                <a href={successResult.links.ensApp} target="_blank" rel="noreferrer" className="btn btn-primary">
+                  View on ENS
+                </a>
+                <a href={successResult.links.ipfs} target="_blank" rel="noreferrer" className="btn btn-primary">
+                  View on IPFS
+                </a>
+                <a href={successResult.links.registrationTx} target="_blank" rel="noreferrer" className="btn btn-ghost">
+                  Registration tx
+                </a>
+                <a href={successResult.links.ensTx} target="_blank" rel="noreferrer" className="btn btn-ghost">
+                  ENS tx
+                </a>
+              </div>
+
+              <div className="wizard-review-grid">
+                <div className="wizard-review-item wide">
+                  <span>Permissions</span>
+                  <div className="wizard-review-tags">
+                    <code className="wizard-review-tag">
+                      Max per payment: {formatMoney(successResult.permissions.maxPerTxUsdc)}
+                    </code>
+                    <code className="wizard-review-tag">
+                      Daily limit: {formatMoney(successResult.permissions.dailyLimitUsdc)}
+                    </code>
+                    {successResult.permissions.allowedTokens.map((token) => (
+                      <code key={token} className="wizard-review-tag">{token}</code>
+                    ))}
+                    {successResult.permissions.allowedChains.map((chain) => (
+                      <code key={chain} className="wizard-review-tag">{chain}</code>
+                    ))}
+                    {successResult.permissions.allowedRecipients.map((recipient) => (
+                      <code key={recipient} className="wizard-review-tag">{recipient}</code>
+                    ))}
+                    {successResult.permissions.allowedHours && (
+                      <code className="wizard-review-tag">
+                        {successResult.permissions.allowedHours[0]}:00 to {successResult.permissions.allowedHours[1]}:00 UTC
+                      </code>
+                    )}
+                  </div>
+                </div>
+                {successResult.ownership && (
+                  <div className="wizard-review-item wide">
+                    <span>Ownership</span>
+                    <div className="wizard-review-tags">
+                      <code className="wizard-review-tag">{successResult.ownership.domainMode}</code>
+                      <code className="wizard-review-tag">{successResult.ownership.feeResponsibility}</code>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="wizard-actions">
                 <Link to="/verify" className="btn btn-ghost">
                   Open verifier
                 </Link>

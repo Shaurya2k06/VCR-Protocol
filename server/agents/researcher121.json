@@ -1,0 +1,21 @@
+{
+  "ensName": "researcher121.vcrtcorp.eth",
+  "walletId": "69b5940ba6fbe70351a12e4b080c816b",
+  "walletAddress": "0xbef57bea3fce0ffef82cd503630578c5deb050c7",
+  "registryWalletAddress": "0x5013b113ea24937ae8b02a17a0a88b6a597fb647",
+  "agentId": 1803,
+  "erc8004AgentUri": "ipfs://bafkreiael2apzmgf22gl373uqfgfmvygr5zguvmyslbyx36gljxcwcd6xa",
+  "erc8004AgentUriTx": "0xa10fd78c99b8c7c42610c7b8b27210db8da0fe4831113686606d961352004c90",
+  "policyCid": "bafkreiez55voyw6kc4qao7nyw2od3d3hxfwovunsrbe5wteim5wnu5yhtu",
+  "policyUri": "ipfs://bafkreiez55voyw6kc4qao7nyw2od3d3hxfwovunsrbe5wteim5wnu5yhtu",
+  "policyGatewayUrl": "https://rose-obliged-wildcat-829.mypinata.cloud/ipfs/bafkreiez55voyw6kc4qao7nyw2od3d3hxfwovunsrbe5wteim5wnu5yhtu",
+  "policyFileId": "0",
+  "policyPortalAddress": "0xa96386adc136287066611E4f4425cCC4505998D6",
+  "policyNamespace": "vcr-policy-researcher121",
+  "bitgoUserKeyCaptured": false,
+  "policyHash": "0xb48d38f93eaa084033fc5970bf96e559c33c4cdc07d889ab00b4d63f9590739d",
+  "registrationTx": "0xcb8d328fedc842bf618a953483f9bc35146f641c6a546966edb9fd9f876fc742",
+  "ensTx": "0xbaa6f01e407f5c44baca6dbbce0bf9d3573481d3402301d7d3822534dd02fb05",
+  "createdAt": "2026-03-14T17:02:07.085Z",
+  "walletPassphrase": "vcr-researcher121-1773507580151"
+}
