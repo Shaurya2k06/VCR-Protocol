@@ -116,6 +116,77 @@ function normalizeSimpleCreateConfig(body: CreateAgentConfig): CreateAgentConfig
   return config;
 }
 
+type RulesDocumentSource = "fileverse" | "ipfs" | "inline";
+
+function toOptionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function getRulesDocumentSource(url?: string, raw?: string): RulesDocumentSource | undefined {
+  if (url) {
+    if (url.includes("docs.fileverse.io") || url.includes("agents.fileverse.io")) {
+      return "fileverse";
+    }
+    return "ipfs";
+  }
+
+  if (raw) {
+    return "inline";
+  }
+
+  return undefined;
+}
+
+function buildSimpleRulesSnapshot(config: CreateAgentConfig): string {
+  return JSON.stringify(
+    {
+      maxPerTxUsdc: config.maxPerTxUsdc,
+      dailyLimitUsdc: config.dailyLimitUsdc,
+      allowedRecipients: config.allowedRecipients,
+      allowedTokens: config.allowedTokens ?? ["USDC"],
+      allowedChains: config.allowedChains ?? ["base-sepolia"],
+      allowedHours: config.allowedHours,
+      description: config.description,
+    },
+    null,
+    2
+  );
+}
+
+function stringifyPolicy(policy: VCRPolicy | undefined): string | undefined {
+  if (!policy) {
+    return undefined;
+  }
+
+  return JSON.stringify(policy, null, 2);
+}
+
+function resolveRulesDocumentFields(params: {
+  explicitUrl?: string;
+  explicitRaw?: string;
+  fallbackUrl?: string;
+  fallbackRaw?: string;
+}): {
+  rulesDocumentUrl?: string;
+  rulesDocumentRaw?: string;
+  rulesDocumentSource?: RulesDocumentSource;
+} {
+  const rulesDocumentUrl =
+    toOptionalString(params.explicitUrl) ?? toOptionalString(params.fallbackUrl);
+  const rulesDocumentRaw =
+    toOptionalString(params.explicitRaw) ?? toOptionalString(params.fallbackRaw);
+
+  return {
+    rulesDocumentUrl,
+    rulesDocumentRaw,
+    rulesDocumentSource: getRulesDocumentSource(rulesDocumentUrl, rulesDocumentRaw),
+  };
+}
+
 router.get("/readiness", (_req, res) => {
   const missing = getMissingSimpleCreateEnv();
 
@@ -144,6 +215,10 @@ router.get("/readiness", (_req, res) => {
 router.post("/", async (req, res) => {
   try {
     if (isSimpleCreateAgentPayload(req.body)) {
+      const body = req.body as CreateAgentConfig & {
+        rulesDocumentUrl?: string;
+        rulesDocumentRaw?: string;
+      };
       const missingEnv = getMissingSimpleCreateEnv();
       if (missingEnv.length > 0) {
         return res.status(503).json({
@@ -152,7 +227,7 @@ router.post("/", async (req, res) => {
         });
       }
 
-      const config = normalizeSimpleCreateConfig(req.body);
+      const config = normalizeSimpleCreateConfig(body);
       const record = await createSdkAgent(config, {
         BITGO_ACCESS_TOKEN: process.env.BITGO_ACCESS_TOKEN!,
         BITGO_ENTERPRISE_ID: process.env.BITGO_ENTERPRISE_ID!,
@@ -161,6 +236,17 @@ router.post("/", async (req, res) => {
         PIMLICO_API_KEY: process.env.PIMLICO_API_KEY!,
         PRIVATE_KEY: process.env.PRIVATE_KEY!,
         SEPOLIA_RPC_URL: process.env.SEPOLIA_RPC_URL!,
+      });
+
+      const recordWithOptionalDocFields = record as typeof record & {
+        policyGatewayUrl?: string;
+      };
+
+      const rulesDocument = resolveRulesDocumentFields({
+        explicitUrl: body.rulesDocumentUrl,
+        explicitRaw: body.rulesDocumentRaw,
+        fallbackUrl: recordWithOptionalDocFields.policyGatewayUrl ?? record.policyUri,
+        fallbackRaw: buildSimpleRulesSnapshot(config),
       });
 
       const ownerAccount = privateKeyToAccount(process.env.PRIVATE_KEY as `0x${string}`);
@@ -173,6 +259,9 @@ router.post("/", async (req, res) => {
         ensName: record.ensName,
         agentUri: record.erc8004AgentUri ?? record.policyUri,
         policyUri: record.policyUri,
+        rulesDocumentUrl: rulesDocument.rulesDocumentUrl,
+        rulesDocumentRaw: rulesDocument.rulesDocumentRaw,
+        rulesDocumentSource: rulesDocument.rulesDocumentSource,
         policyCid: record.policyCid,
         bitgoWalletId: record.walletId,
         registrationTxHash: record.registrationTx,
@@ -184,6 +273,7 @@ router.post("/", async (req, res) => {
       return res.status(201).json({
         mode: "sdk-create-agent",
         record,
+        rulesDocument,
         sdkReferences: [
           "sdk/src/createAgent.ts",
           "sdk/src/types.ts",
@@ -200,12 +290,16 @@ router.post("/", async (req, res) => {
       services,
       policy,
       ensName,
+      rulesDocumentUrl,
+      rulesDocumentRaw,
     } = req.body as {
       name: string;
       description?: string;
       services?: AgentMetadata["services"];
       policy?: VCRPolicy;
       ensName?: string;
+      rulesDocumentUrl?: string;
+      rulesDocumentRaw?: string;
     };
 
     if (!name) {
@@ -271,6 +365,14 @@ router.post("/", async (req, res) => {
       }
     }
 
+    const rulesDocument = resolveRulesDocumentFields({
+      explicitUrl: rulesDocumentUrl,
+      explicitRaw: rulesDocumentRaw,
+      fallbackUrl: response.policyUri as string | undefined,
+      fallbackRaw: stringifyPolicy(policy),
+    });
+    response.rulesDocument = rulesDocument;
+
     // ── Step 6: Persist agent to MongoDB ──────────────────────────────────────
     const ownerAccount = privateKeyToAccount(process.env.PRIVATE_KEY as `0x${string}`);
     await saveAgent({
@@ -281,6 +383,9 @@ router.post("/", async (req, res) => {
       ensName: ensName,
       agentUri,
       policyUri: response.policyUri as string | undefined,
+      rulesDocumentUrl: rulesDocument.rulesDocumentUrl,
+      rulesDocumentRaw: rulesDocument.rulesDocumentRaw,
+      rulesDocumentSource: rulesDocument.rulesDocumentSource,
       policyCid: response.policyCid as string | undefined,
       registrationTxHash: txHash,
       active: true,
