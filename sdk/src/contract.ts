@@ -1,3 +1,5 @@
+import { getWalletClient } from "./client.js";
+
 // ─── VCRPolicyRegistry — On-Chain Contract SDK ───────────────────────────────
 import {
     createPublicClient,
@@ -30,18 +32,6 @@ function getPublicClient() {
     return createPublicClient({ chain: sepolia, transport: http(rpcUrl) });
 }
 
-function getWalletClient() {
-    const rpcUrl = process.env.SEPOLIA_RPC_URL;
-    const privateKey = process.env.PRIVATE_KEY as `0x${string}`;
-    if (!rpcUrl || !privateKey)
-        throw new Error("SEPOLIA_RPC_URL and PRIVATE_KEY must be set");
-    const account = privateKeyToAccount(privateKey);
-    return createWalletClient({
-        account,
-        chain: sepolia,
-        transport: http(rpcUrl),
-    });
-}
 
 function getRegistryAddress(): Address {
     const addr = process.env.VCR_REGISTRY_ADDRESS;
@@ -67,7 +57,7 @@ export async function setPolicyOnChain(
     policyUri: string,
     agentId: number
 ): Promise<SetPolicyOnChainResult> {
-    const walletClient = getWalletClient();
+    const walletClient = await getWalletClient();
     const registryAddress = getRegistryAddress();
     const node = namehash(normalize(ensName));
 
@@ -87,7 +77,7 @@ export async function setPolicyOnChain(
 export async function revokePolicyOnChain(
     ensName: string
 ): Promise<{ txHash: string }> {
-    const walletClient = getWalletClient();
+    const walletClient = await getWalletClient();
     const registryAddress = getRegistryAddress();
     const node = namehash(normalize(ensName));
 

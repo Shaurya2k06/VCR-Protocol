@@ -60,8 +60,7 @@
     "test:coverage": "vitest run --coverage",
     "demo": "tsx scripts/demo.ts",
     "setup": "tsx scripts/setup-agent.ts",
-    "register-ens": "tsx scripts/register-ens.ts",
-    "validate": "tsx scripts/validate-e2e.ts"
+    "register-ens": "tsx scripts/register-ens.ts"
   },
   "keywords": [
     "vcr",
@@ -81,6 +80,7 @@
     "@bitgo/sdk-api": "^1.63.0",
     "@bitgo/sdk-coin-eth": "^25.0.0",
     "json-stringify-deterministic": "^1.0.12",
+    "permissionless": "^0.3.4",
     "pinata": "^2.5.5",
     "viem": "^2.31.3"
   },
