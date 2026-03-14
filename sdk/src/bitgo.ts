@@ -80,7 +80,8 @@ export async function createAgentWallet(
     label,
     passphrase: walletPassphrase,
     enterprise: enterpriseId,
-    ...(isTestnet ? {} : { walletVersion: 3, multisigType: "onchain" }),
+    multisigType: "onchain",
+    ...(isTestnet ? {} : { walletVersion: 3 }),
   } as any);
 
   const wallet = result.wallet;
