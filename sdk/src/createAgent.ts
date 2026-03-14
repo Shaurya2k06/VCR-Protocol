@@ -25,7 +25,13 @@ import fs from "fs/promises";
 import path from "path";
 
 import { createAgentWallet } from "./bitgo.js";
-import { registerAgent, waitForAgentRegistration, setAgentWallet } from "./erc8004.js";
+import {
+  buildAgentMetadataJson,
+  registerAgent,
+  setAgentURI,
+  setAgentWallet,
+  waitForAgentRegistration,
+} from "./erc8004.js";
 import { buildPolicyGatewayUrl, setAllENSRecords } from "./ens.js";
 import { ERC8004_ADDRESSES } from "./erc8004.js";
 import { buildPolicyNamespace, storePolicyDocument } from "./fileverse.js";
@@ -33,7 +39,6 @@ import type {
   CreateAgentConfig,
   AgentRecord,
   VCRPolicy,
-  AgentMetadata,
 } from "./types.js";
 
 // ─── IPFS helpers ─────────────────────────────────────────────────────────────
@@ -152,28 +157,9 @@ export async function createAgent(
   // ── Step 2: Register on ERC-8004 ─────────────────────────────────────────
   console.log("2/5  Registering ERC-8004 agent NFT on Sepolia…");
 
-  // Build and pin the agent card (ERC-8004 agent URI)
-  const agentCard: AgentMetadata = {
-    type:        "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
-    name:        config.name,
-    description: config.description ?? `VCR-enabled agent: ${config.name}`,
-    registrations: [],            // filled in after agentId is known
-    services: [{ name: "ens", endpoint: ensName }],
-    x402Support:   true,
-    active:        true,
-    supportedTrust: ["erc8004-reputation", "vcr-policy"],
-  };
-
-  const agentCardCid = await pinJson(
-    agentCard,
-    env.PINATA_JWT,
-    env.PINATA_GATEWAY,
-  );
-
-  // Submit registration tx; agentId is read from the emitted event
-  const { txHash: regTxHash } = await registerAgent(
-    `ipfs://${agentCardCid}`,
-  );
+  // Register first so the final ERC-8004 registration file can self-reference
+  // its real on-chain agentId in the `registrations` section.
+  const { txHash: regTxHash } = await registerAgent();
 
   const { agentId, txHash: registrationTx } =
     await waitForAgentRegistration(regTxHash);
@@ -237,6 +223,31 @@ export async function createAgent(
   console.log(`   ✅  Policy URI: ${policyUri}`);
   console.log(`   ✅  Gateway URL: ${policyGatewayUrl}`);
   console.log(`   ✅  Fileverse file ID: ${storedPolicy.fileId}`);
+
+  // ── Step 4b: Finalize ERC-8004 agentURI with full registration metadata ──
+  const agentCard = buildAgentMetadataJson(
+    {
+      name: config.name,
+      description: config.description ?? `VCR-enabled agent: ${config.name}`,
+      services: [{ name: "ens", endpoint: ensName }],
+      x402Support: true,
+      active: true,
+      supportedTrust: ["erc8004-reputation", "vcr-policy"],
+    },
+    ERC8004_ADDRESSES.identityRegistry.sepolia,
+    agentId,
+    11155111,
+  );
+
+  const agentCardCid = await pinJson(
+    agentCard,
+    env.PINATA_JWT,
+    env.PINATA_GATEWAY,
+  );
+  const agentCardUri = `ipfs://${agentCardCid}`;
+  const agentUriTx = await setAgentURI(agentId, agentCardUri);
+  console.log(`   ✅  ERC-8004 agentURI: ${agentCardUri}`);
+  console.log(`   ✅  ERC-8004 setAgentURI tx: ${agentUriTx}`);
 
   // ── Step 5: Bind ENS via ENSIP-25 + contenthash ──────────────────────────
   console.log("5/5  Binding ENS via ENSIP-25 + contenthash…");
@@ -322,6 +333,8 @@ export async function createAgent(
     walletAddress:  bitgoResult.forwarderAddress,
     registryWalletAddress: linkedRegistryWalletAddress,
     agentId,
+    erc8004AgentUri: agentCardUri,
+    erc8004AgentUriTx: agentUriTx,
     policyCid,
     policyUri,
     policyGatewayUrl,

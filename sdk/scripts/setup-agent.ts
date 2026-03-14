@@ -314,6 +314,9 @@ async function main(): Promise<void> {
     if (record.registryWalletAddress) {
       console.log(`  Registry wallet : ${record.registryWalletAddress}`);
     }
+    if (record.erc8004AgentUri) {
+      console.log(`  ERC-8004 URI    : ${record.erc8004AgentUri}`);
+    }
     console.log(`  Policy CID      : ${record.policyCid}`);
     if (record.policyGatewayUrl) {
       console.log(`  Policy URL      : ${record.policyGatewayUrl}`);

@@ -1,5 +1,6 @@
 import { getEOAWalletClient } from "./client.js";
 import { decode as decodeContenthash, encode as encodeContenthash } from "@ensdomains/content-hash";
+import { verifyERC8004Registration } from "./erc8004.js";
 import { extractPolicyCid } from "./policy.js";
 
 // ─── ENS Integration — ENSIP-25 + Policy contenthash ─────────────────────────
@@ -470,18 +471,14 @@ export async function getAgentRegistrationRecord(
   });
 }
 
-// ABI fragment used for ownership cross-check in verifyAgentENSLink
-const identityRegistryReadAbi = parseAbi([
-  "function ownerOf(uint256 agentId) external view returns (address)",
-]);
-
 /**
  * Verify the bidirectional ENS ↔ ERC-8004 link per ENSIP-25.
  *
  * Performs three checks:
  *   1. The ENSIP-25 agent-registration text record exists and is non-empty
  *      (ENSIP-25 only requires non-empty; VCR convention is "1")
- *   2. The ERC-8004 registry confirms ownership of the agentId
+ *   2. The ERC-8004 registry confirms ownership of the agentId and the
+ *      registration file claims the same ENS name
  *   3. The ENS name owner matches the registry agent owner
  *      (proves the ENS name is controlled by the same party as the ERC-8004 entry)
  *
@@ -515,15 +512,25 @@ export async function verifyAgentENSLink(
     };
   }
 
-  // ── Check 2: ERC-8004 registry ownership ─────────────────────────────────
+  // ── Check 2: ERC-8004 registry ownership and registration-file claim ─────
   let registryOwner: string;
+  let agentUri: string | undefined;
+  let agentRegistrationEns: string | undefined;
   try {
-    registryOwner = (await publicClient.readContract({
-      address: registryAddress as `0x${string}`,
-      abi: identityRegistryReadAbi,
-      functionName: "ownerOf",
-      args: [BigInt(agentId)],
-    })) as string;
+    const erc8004Result = await verifyERC8004Registration(agentId, ensName);
+    if (!erc8004Result.valid || !erc8004Result.owner) {
+      return {
+        valid: false,
+        reason: erc8004Result.reason ?? "ERC-8004 registration verification failed",
+        ensRecord,
+        registryOwner: erc8004Result.owner,
+        agentUri: erc8004Result.agentUri,
+        agentRegistrationEns: erc8004Result.ensEndpoint,
+      };
+    }
+    registryOwner = erc8004Result.owner;
+    agentUri = erc8004Result.agentUri;
+    agentRegistrationEns = erc8004Result.ensEndpoint;
   } catch (err) {
     return {
       valid: false,
@@ -564,6 +571,8 @@ export async function verifyAgentENSLink(
       reason: `ENS owner lookup failed: ${(err as Error).message}`,
       ensRecord,
       registryOwner,
+      agentUri,
+      agentRegistrationEns,
     };
   }
 
@@ -573,6 +582,8 @@ export async function verifyAgentENSLink(
       reason: `ENS name "${ensName}" has no owner in the ENS registry`,
       ensRecord,
       registryOwner,
+      agentUri,
+      agentRegistrationEns,
     };
   }
 
@@ -585,6 +596,8 @@ export async function verifyAgentENSLink(
       ensRecord,
       registryOwner,
       ensOwner,
+      agentUri,
+      agentRegistrationEns,
     };
   }
 
@@ -593,5 +606,7 @@ export async function verifyAgentENSLink(
     ensRecord,
     registryOwner,
     ensOwner,
+    agentUri,
+    agentRegistrationEns,
   };
 }

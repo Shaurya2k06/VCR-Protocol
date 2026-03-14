@@ -60,6 +60,7 @@
     "test:coverage": "vitest run --coverage",
     "demo": "tsx scripts/demo.ts",
     "setup": "tsx scripts/setup-agent.ts",
+    "update-policy": "tsx scripts/update-policy.ts",
     "register-ens": "tsx scripts/register-ens.ts"
   },
   "keywords": [

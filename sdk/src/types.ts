@@ -148,6 +148,13 @@ export interface CreateAgentConfig {
   description?: string;
 }
 
+export interface UpdateAgentPolicyConfig {
+  recordPath: string;
+  constraints: VCRConstraints;
+  description?: string;
+  expiresAt?: string;
+}
+
 export interface AgentRecord {
   /** "researcher-001.acmecorp.eth" */
   ensName: string;
@@ -162,6 +169,10 @@ export interface AgentRecord {
   registryWalletAddress?: string;
   /** ERC-8004 agentId (starts from 0) */
   agentId: number;
+  /** ERC-8004 registration file URI stored in tokenURI / agentURI */
+  erc8004AgentUri?: string;
+  /** Transaction hash that finalized the ERC-8004 agentURI */
+  erc8004AgentUriTx?: string;
   /** IPFS CID of the final VCR policy document */
   policyCid: string;
   /** ipfs:// URI of the final VCR policy document */
@@ -174,6 +185,8 @@ export interface AgentRecord {
   policyPortalAddress?: string;
   /** Fileverse namespace used to provision agent storage */
   policyNamespace?: string;
+  /** Append-only history of policy versions published via Fileverse + ENS */
+  policyVersions?: PolicyVersionRecord[];
   /** True if BitGo returned the one-time plaintext user key during creation */
   bitgoUserKeyCaptured?: boolean;
   /** keccak256 of the live BitGo wallet policy at creation time */
@@ -183,6 +196,17 @@ export interface AgentRecord {
   /** ENS text records transaction hash */
   ensTx: string;
   /** ISO 8601 creation timestamp */
+  createdAt: string;
+}
+
+export interface PolicyVersionRecord {
+  policyCid: string;
+  policyUri: string;
+  policyGatewayUrl?: string;
+  policyFileId?: string;
+  policyPortalAddress?: string;
+  policyNamespace?: string;
+  ensTx?: string;
   createdAt: string;
 }
 
@@ -204,6 +228,10 @@ export interface LinkVerificationResult {
   registryOwner?: string;
   /** Address that the ENS name resolves to */
   ensOwner?: string;
+  /** tokenURI / agentURI stored on ERC-8004 */
+  agentUri?: string;
+  /** ENS endpoint claimed by the ERC-8004 registration file */
+  agentRegistrationEns?: string;
 }
 
 // ─── ERC-8004 Agent ───────────────────────────────────────────────────────────
@@ -229,6 +257,16 @@ export interface AgentMetadata {
   x402Support?: boolean;
   active: boolean;
   supportedTrust?: string[];
+}
+
+export interface ERC8004VerificationResult {
+  valid: boolean;
+  reason?: string;
+  owner?: string;
+  agentUri?: string;
+  registration?: AgentMetadata;
+  ensEndpoint?: string;
+  hasMatchingRegistration?: boolean;
 }
 
 // ─── BitGo ────────────────────────────────────────────────────────────────────
@@ -296,6 +334,25 @@ export interface X402PaymentRequirement {
   facilitator: string;
 }
 
+export interface X402PaymentAuthorization {
+  from: string;
+  to: string;
+  value: string;
+  validAfter: string;
+  validBefore: string;
+  nonce: `0x${string}`;
+  signature: `0x${string}`;
+  ensName?: string;
+}
+
+export interface X402SignedRequest {
+  scheme: "exact";
+  network: string;
+  token: string;
+  facilitator: string;
+  authorization: X402PaymentAuthorization;
+}
+
 // ─── IPFS / Pinata ────────────────────────────────────────────────────────────
 
 export interface PinResult {
@@ -310,6 +367,7 @@ export interface FileversePolicyResult {
   contentUri: string;
   metadataUri: string;
   txHash: string;
+  activityUrl?: string;
 }
 
 // ─── ENS ─────────────────────────────────────────────────────────────────────

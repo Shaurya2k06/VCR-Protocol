@@ -1,7 +1,12 @@
 // ─── x402 Protocol — VCR-Aware Payment Middleware ─────────────────────────────
 import type { Request, Response, NextFunction } from "express";
+import { privateKeyToAccount } from "viem/accounts";
 import { canAgentSpend } from "./verifier.js";
-import type { SpendRequest, X402PaymentRequirement } from "./types.js";
+import type {
+  SpendRequest,
+  X402PaymentRequirement,
+  X402SignedRequest,
+} from "./types.js";
 import type { DailySpentGetter } from "./verifier.js";
 
 // x402 V2 Header constants (no X- prefix)
@@ -62,13 +67,15 @@ export function vcrPaymentMiddleware(options: VCRPaymentOptions) {
 
     // ── Verify payment signature with facilitator ──────────────────────────────
     const facilitator = options.facilitator ?? X402_FACILITATOR;
+    const signedRequest = paymentSig ? parsePaymentSignatureHeader(paymentSig) : null;
     let verifyResult: { valid: boolean; from?: string; error?: string };
     try {
       const verifyResponse = await fetch(`${facilitator}/verify`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          signature: paymentSig,
+          signature: signedRequest?.authorization.signature ?? paymentSig,
+          authorization: signedRequest?.authorization,
           amount: options.amount,
           token: options.token,
           network: options.network,
@@ -114,7 +121,8 @@ export function vcrPaymentMiddleware(options: VCRPaymentOptions) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          signature: paymentSig,
+          signature: signedRequest?.authorization.signature ?? paymentSig,
+          authorization: signedRequest?.authorization,
           amount: options.amount,
           token: options.token,
           network: options.network,
@@ -140,6 +148,7 @@ export interface VCRClientOptions {
   chainId: number;
   usdcAddress: string;
   getDailySpent: DailySpentGetter;
+  fetchImpl?: typeof fetch;
 }
 
 /**
@@ -173,10 +182,14 @@ export function buildEIP3009TypedData(params: {
     from, to, value,
     validAfter = 0,
     validBefore = Math.floor(Date.now() / 1000) + 3600,
-    nonce = `0x${crypto.randomUUID().replace(/-/g, "")}`,
+    nonce,
     chainId,
     usdcAddress,
   } = params;
+
+  const defaultNonce = `0x${Array.from(crypto.getRandomValues(new Uint8Array(32)))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")}` as `0x${string}`;
 
   return {
     types: {
@@ -194,7 +207,7 @@ export function buildEIP3009TypedData(params: {
       name: "USD Coin",
       version: "2",
       chainId,
-      verifyingContract: usdcAddress,
+      verifyingContract: usdcAddress as `0x${string}`,
     },
     message: {
       from,
@@ -202,7 +215,92 @@ export function buildEIP3009TypedData(params: {
       value: BigInt(value),
       validAfter: BigInt(validAfter),
       validBefore: BigInt(validBefore),
-      nonce: nonce as `0x${string}`,
+      nonce: (nonce ?? defaultNonce) as `0x${string}`,
     },
   };
+}
+
+export function parsePaymentSignatureHeader(header: string): X402SignedRequest | null {
+  try {
+    return JSON.parse(header) as X402SignedRequest;
+  } catch {
+    return null;
+  }
+}
+
+export async function createSignedPaymentRequest(
+  requirement: X402PaymentRequirement,
+  options: VCRClientOptions,
+): Promise<X402SignedRequest> {
+  const spendRequest: SpendRequest = {
+    amount: requirement.price,
+    token: requirement.token,
+    recipient: requirement.recipient,
+    chain: requirement.network,
+  };
+
+  const preflight = await canAgentSpend(
+    options.ensName,
+    spendRequest,
+    options.getDailySpent,
+  );
+
+  if (!preflight.allowed) {
+    throw new Error(`VCR preflight blocked payment: ${preflight.reason ?? "unknown reason"}`);
+  }
+
+  const account = privateKeyToAccount(options.privateKey as `0x${string}`);
+  const typedData = buildEIP3009TypedData({
+    from: account.address,
+    to: requirement.recipient,
+    value: requirement.price,
+    chainId: options.chainId,
+    usdcAddress: options.usdcAddress,
+  });
+
+  const signature = await account.signTypedData(typedData);
+
+  return {
+    scheme: "exact",
+    network: requirement.network,
+    token: requirement.token,
+    facilitator: requirement.facilitator,
+    authorization: {
+      from: account.address,
+      to: requirement.recipient,
+      value: requirement.price,
+      validAfter: typedData.message.validAfter.toString(),
+      validBefore: typedData.message.validBefore.toString(),
+      nonce: typedData.message.nonce,
+      signature,
+      ensName: options.ensName,
+    },
+  };
+}
+
+export async function fetchWithVCRPayment(
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+  options: VCRClientOptions,
+): Promise<globalThis.Response> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const initialResponse = await fetchImpl(input, init);
+  if (initialResponse.status !== 402) {
+    return initialResponse;
+  }
+
+  const requirement = parsePaymentRequired(initialResponse);
+  if (!requirement) {
+    throw new Error("PAYMENT-REQUIRED header missing or invalid");
+  }
+
+  const signedPayment = await createSignedPaymentRequest(requirement, options);
+  const headers = new Headers(init?.headers);
+  headers.set(X402_HEADERS.PAYMENT_SIGNATURE, JSON.stringify(signedPayment));
+  headers.set("x-agent-ens", options.ensName);
+
+  return fetchImpl(input, {
+    ...init,
+    headers,
+  });
 }

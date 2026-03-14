@@ -13,7 +13,8 @@ import {
 } from "viem";
 import { sepolia } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
-import type { AgentMetadata } from "./types.js";
+import { extractPolicyCid } from "./policy.js";
+import type { AgentMetadata, ERC8004VerificationResult } from "./types.js";
 
 // ─── Contract Addresses ───────────────────────────────────────────────────────
 
@@ -34,6 +35,8 @@ const identityRegistryAbi = parseAbi([
   "function register() external returns (uint256)",
   "function register(string memory agentURI) external returns (uint256)",
   "function register(string memory agentURI, bytes memory metadata) external returns (uint256)",
+  "function tokenURI(uint256 agentId) view returns (string)",
+  "function setAgentURI(uint256 agentId, string memory agentURI) external",
   "function setMetadata(uint256 agentId, string memory key, string memory value) external",
   "function ownerOf(uint256 agentId) external view returns (address)",
   "function getOwner(uint256 agentId) external view returns (address)",
@@ -74,16 +77,22 @@ export interface RegistrationResult {
  * after the transaction confirms.
  */
 export async function registerAgent(
-  agentUri: string,
+  agentUri?: string,
 ): Promise<{ txHash: string }> {
   const walletClient = getEOAWalletClient();
-
-  const txHash = await walletClient.writeContract({
-    address: ERC8004_ADDRESSES.identityRegistry.sepolia,
-    abi: identityRegistryAbi,
-    functionName: "register",
-    args: [agentUri],
-  });
+  const txHash = agentUri
+    ? await walletClient.writeContract({
+        address: ERC8004_ADDRESSES.identityRegistry.sepolia,
+        abi: identityRegistryAbi,
+        functionName: "register",
+        args: [agentUri],
+      })
+    : await walletClient.writeContract({
+        address: ERC8004_ADDRESSES.identityRegistry.sepolia,
+        abi: identityRegistryAbi,
+        functionName: "register",
+        args: [],
+      });
 
   return { txHash };
 }
@@ -175,6 +184,29 @@ export async function getAgentOwner(agentId: number): Promise<Address> {
     functionName: "ownerOf",
     args: [BigInt(agentId)],
   }) as Promise<Address>;
+}
+
+export async function getAgentURI(agentId: number): Promise<string> {
+  const publicClient = getPublicClient();
+  return publicClient.readContract({
+    address: ERC8004_ADDRESSES.identityRegistry.sepolia,
+    abi: identityRegistryAbi,
+    functionName: "tokenURI",
+    args: [BigInt(agentId)],
+  }) as Promise<string>;
+}
+
+export async function setAgentURI(
+  agentId: number,
+  agentUri: string,
+): Promise<string> {
+  const walletClient = getEOAWalletClient();
+  return walletClient.writeContract({
+    address: ERC8004_ADDRESSES.identityRegistry.sepolia,
+    abi: identityRegistryAbi,
+    functionName: "setAgentURI",
+    args: [BigInt(agentId), agentUri],
+  });
 }
 
 /**
@@ -365,6 +397,153 @@ export function buildAgentMetadataJson(
         agentId,
       },
     ],
-    supportedTrust: ["reputation", "vcr-policy"],
+    supportedTrust: meta.supportedTrust ?? ["erc8004-reputation", "vcr-policy"],
+  };
+}
+
+export function findAgentRegistrationEns(registration: AgentMetadata): string | null {
+  for (const service of registration.services ?? []) {
+    if (service.name.toLowerCase() === "ens" && service.endpoint) {
+      return service.endpoint;
+    }
+    if (service.endpoint.toLowerCase().endsWith(".eth")) {
+      return service.endpoint;
+    }
+  }
+
+  return null;
+}
+
+async function fetchJsonUri<T>(uri: string): Promise<T> {
+  if (uri.startsWith("ipfs://")) {
+    const cid = extractPolicyCid(uri);
+    const gateways: string[] = [];
+    const pinataGateway = process.env.PINATA_GATEWAY;
+    if (pinataGateway) {
+      const normalizedGateway = pinataGateway.replace(/^https?:\/\//i, "").replace(/\/+$/g, "");
+      gateways.push(`https://${normalizedGateway}/ipfs/${cid}`);
+    }
+    gateways.push(
+      `https://dweb.link/ipfs/${cid}`,
+      `https://ipfs.io/ipfs/${cid}`,
+    );
+
+    let lastError: Error | null = null;
+    for (const gateway of gateways) {
+      try {
+        const response = await fetch(gateway, { signal: AbortSignal.timeout(5000) });
+        if (response.ok) {
+          return (await response.json()) as T;
+        }
+        lastError = new Error(`HTTP ${response.status} from ${gateway}`);
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+      }
+    }
+
+    throw lastError ?? new Error(`Failed to fetch ${uri}`);
+  }
+
+  const response = await fetch(uri, { signal: AbortSignal.timeout(5000) });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch ${uri}: HTTP ${response.status}`);
+  }
+  return (await response.json()) as T;
+}
+
+export async function resolveAgentRegistration(agentId: number): Promise<{
+  agentUri: string;
+  registration: AgentMetadata;
+}> {
+  const agentUri = await getAgentURI(agentId);
+  const registration = await fetchJsonUri<AgentMetadata>(agentUri);
+  return { agentUri, registration };
+}
+
+export async function verifyERC8004Registration(
+  agentId: number,
+  expectedEnsName?: string,
+  expectedOwner?: string,
+): Promise<ERC8004VerificationResult> {
+  let owner: string;
+  try {
+    owner = await getAgentOwner(agentId);
+  } catch (error) {
+    return {
+      valid: false,
+      reason: `ownerOf(${agentId}) failed: ${(error as Error).message}`,
+    };
+  }
+
+  if (expectedOwner && owner.toLowerCase() !== expectedOwner.toLowerCase()) {
+    return {
+      valid: false,
+      reason: `ERC-8004 owner mismatch: expected ${expectedOwner}, got ${owner}`,
+      owner,
+    };
+  }
+
+  let agentUri: string;
+  let registration: AgentMetadata;
+  try {
+    const resolved = await resolveAgentRegistration(agentId);
+    agentUri = resolved.agentUri;
+    registration = resolved.registration;
+  } catch (error) {
+    return {
+      valid: false,
+      reason: `agentURI fetch failed: ${(error as Error).message}`,
+      owner,
+    };
+  }
+
+  if (registration.type !== "https://eips.ethereum.org/EIPS/eip-8004#registration-v1") {
+    return {
+      valid: false,
+      reason: `Unexpected ERC-8004 registration type: ${registration.type}`,
+      owner,
+      agentUri,
+      registration,
+    };
+  }
+
+  const expectedAgentRegistry =
+    `eip155:11155111:${ERC8004_ADDRESSES.identityRegistry.sepolia.toLowerCase()}`;
+  const hasMatchingRegistration = (registration.registrations ?? []).some((entry) =>
+    entry.agentRegistry.toLowerCase() === expectedAgentRegistry &&
+    entry.agentId === agentId,
+  );
+
+  if (!hasMatchingRegistration) {
+    return {
+      valid: false,
+      reason: `ERC-8004 registration file does not self-reference agent ${agentId}`,
+      owner,
+      agentUri,
+      registration,
+      hasMatchingRegistration,
+    };
+  }
+
+  const ensEndpoint = findAgentRegistrationEns(registration) ?? undefined;
+  if (expectedEnsName && ensEndpoint?.toLowerCase() !== expectedEnsName.toLowerCase()) {
+    return {
+      valid: false,
+      reason: `ERC-8004 registration ENS claim mismatch: expected ${expectedEnsName}, got ${ensEndpoint ?? "none"}`,
+      owner,
+      agentUri,
+      registration,
+      ensEndpoint,
+      hasMatchingRegistration,
+    };
+  }
+
+  return {
+    valid: true,
+    owner,
+    agentUri,
+    registration,
+    ensEndpoint,
+    hasMatchingRegistration,
   };
 }
