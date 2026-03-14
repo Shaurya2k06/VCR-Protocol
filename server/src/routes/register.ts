@@ -17,6 +17,14 @@ import type {
   VCRPolicy,
 } from "@vcr-protocol/sdk";
 import { PinataSDK } from "pinata";
+import {
+  appendAgentCreationJobLog,
+  completeAgentCreationJob,
+  createAgentCreationJob,
+  failAgentCreationJob,
+  getAgentCreationJob,
+  startAgentCreationJob,
+} from "../lib/agentCreationJobs.js";
 import { saveAgent, getAgentByChainId, getAgentsByOwner } from "../models/Agent.js";
 import { getAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -32,6 +40,20 @@ const SIMPLE_CREATE_REQUIRED_ENV = [
   "PRIVATE_KEY",
   "SEPOLIA_RPC_URL",
 ] as const;
+
+const MANAGED_DOMAINS = ["vcrtcorp.eth"] as const;
+
+type DomainMode = "managed" | "self-owned";
+
+interface SimpleCreateAgentRequest extends CreateAgentConfig {
+  creatorAddress?: string;
+  domainMode?: DomainMode;
+}
+
+interface NormalizedSimpleCreateRequest extends CreateAgentConfig {
+  creatorAddress: `0x${string}`;
+  domainMode: DomainMode;
+}
 
 function getMissingSimpleCreateEnv(): string[] {
   return SIMPLE_CREATE_REQUIRED_ENV.filter((key) => !process.env[key]);
@@ -50,7 +72,19 @@ function isSimpleCreateAgentPayload(body: unknown): body is CreateAgentConfig {
   );
 }
 
-function normalizeSimpleCreateConfig(body: CreateAgentConfig): CreateAgentConfig {
+function isManagedDomain(baseDomain: string): boolean {
+  return MANAGED_DOMAINS.includes(baseDomain as (typeof MANAGED_DOMAINS)[number]);
+}
+
+function getSelfOwnedUnsupportedMessage(baseDomain: string): string {
+  return [
+    `Self-owned ENS domains are not fully automated in this release.`,
+    `Use your connected wallet to register or manage ${baseDomain} in ENS App,`,
+    `then either switch to ${MANAGED_DOMAINS[0]} for one-click creation or wait for delegated signing support.`,
+  ].join(" ");
+}
+
+function normalizeSimpleCreateConfig(body: SimpleCreateAgentRequest): NormalizedSimpleCreateRequest {
   const allowedRecipients = Array.isArray(body.allowedRecipients)
     ? body.allowedRecipients
         .map((recipient) => getAddress(String(recipient).trim()))
@@ -64,9 +98,27 @@ function normalizeSimpleCreateConfig(body: CreateAgentConfig): CreateAgentConfig
     ? body.allowedChains.map((chain) => String(chain).trim()).filter(Boolean)
     : undefined;
 
-  const config: CreateAgentConfig = {
+  const creatorAddressRaw = String(body.creatorAddress ?? "").trim();
+  if (!creatorAddressRaw) {
+    throw new Error("creatorAddress is required. Connect a wallet before creating an agent.");
+  }
+
+  const creatorAddress = getAddress(creatorAddressRaw);
+  const baseDomain = String(body.baseDomain ?? "").trim().toLowerCase();
+  const inferredDomainMode: DomainMode = isManagedDomain(baseDomain) ? "managed" : "self-owned";
+  const requestedDomainMode = body.domainMode;
+
+  if (requestedDomainMode && requestedDomainMode !== inferredDomainMode) {
+    throw new Error(
+      requestedDomainMode === "managed"
+        ? `Managed mode is only available for ${MANAGED_DOMAINS.join(", ")}`
+        : "Custom domains must use self-owned mode",
+    );
+  }
+
+  const config: NormalizedSimpleCreateRequest = {
     name: String(body.name ?? "").trim().toLowerCase(),
-    baseDomain: String(body.baseDomain ?? "").trim().toLowerCase(),
+    baseDomain,
     maxPerTxUsdc: String(body.maxPerTxUsdc ?? "").trim(),
     dailyLimitUsdc: String(body.dailyLimitUsdc ?? "").trim(),
     allowedRecipients,
@@ -74,6 +126,8 @@ function normalizeSimpleCreateConfig(body: CreateAgentConfig): CreateAgentConfig
     allowedTokens: allowedTokens?.length ? allowedTokens : undefined,
     allowedChains: allowedChains?.length ? allowedChains : undefined,
     allowedHours: body.allowedHours,
+    creatorAddress,
+    domainMode: requestedDomainMode ?? inferredDomainMode,
   };
 
   if (!config.name) {
@@ -116,6 +170,7 @@ function normalizeSimpleCreateConfig(body: CreateAgentConfig): CreateAgentConfig
   return config;
 }
 
+<<<<<<< HEAD
 type RulesDocumentSource = "fileverse" | "ipfs" | "inline";
 
 function toOptionalString(value: unknown): string | undefined {
@@ -144,12 +199,59 @@ function getRulesDocumentSource(url?: string, raw?: string): RulesDocumentSource
 function buildSimpleRulesSnapshot(config: CreateAgentConfig): string {
   return JSON.stringify(
     {
+=======
+function getRegistrationRuntimeEnv() {
+  return {
+    BITGO_ACCESS_TOKEN: process.env.BITGO_ACCESS_TOKEN!,
+    BITGO_ENTERPRISE_ID: process.env.BITGO_ENTERPRISE_ID!,
+    PINATA_JWT: process.env.PINATA_JWT!,
+    PINATA_GATEWAY: process.env.PINATA_GATEWAY!,
+    PIMLICO_API_KEY: process.env.PIMLICO_API_KEY!,
+    PRIVATE_KEY: process.env.PRIVATE_KEY!,
+    SEPOLIA_RPC_URL: process.env.SEPOLIA_RPC_URL!,
+  };
+}
+
+function getSigningAccount() {
+  return privateKeyToAccount(process.env.PRIVATE_KEY as `0x${string}`);
+}
+
+function buildSuccessPayload(config: NormalizedSimpleCreateRequest, record: any) {
+  const signingAccount = getSigningAccount();
+
+  return {
+    record: {
+      ...record,
+      creatorAddress: config.creatorAddress,
+      ownerAddress: signingAccount.address,
+      signingAddress: signingAccount.address,
+      registrationMode: config.domainMode,
+    },
+    ownership: {
+      creatorAddress: config.creatorAddress,
+      signingAddress: signingAccount.address,
+      domainMode: config.domainMode,
+      feeResponsibility:
+        config.domainMode === "managed"
+          ? "Managed domain: the backend signer pays the Sepolia ENS subdomain write gas."
+          : "Self-owned domain: your connected wallet pays ENS registration and write gas.",
+    },
+    links: {
+      ensApp: `https://app.ens.domains/name/${record.ensName}`,
+      registrationTx: `https://sepolia.etherscan.io/tx/${record.registrationTx}`,
+      ensTx: `https://sepolia.etherscan.io/tx/${record.ensTx}`,
+      ipfs: record.policyGatewayUrl ?? record.policyUri,
+      policyUri: record.policyUri,
+    },
+    permissions: {
+>>>>>>> 17b622a1415783978ca7541e4f3989b15b751134
       maxPerTxUsdc: config.maxPerTxUsdc,
       dailyLimitUsdc: config.dailyLimitUsdc,
       allowedRecipients: config.allowedRecipients,
       allowedTokens: config.allowedTokens ?? ["USDC"],
       allowedChains: config.allowedChains ?? ["base-sepolia"],
       allowedHours: config.allowedHours,
+<<<<<<< HEAD
       description: config.description,
     },
     null,
@@ -187,12 +289,94 @@ function resolveRulesDocumentFields(params: {
   };
 }
 
+=======
+    },
+  };
+}
+
+async function persistCreatedAgent(
+  config: NormalizedSimpleCreateRequest,
+  record: any,
+): Promise<void> {
+  const ownerAccount = getSigningAccount();
+  await saveAgent({
+    agentId: record.agentId,
+    name: config.name,
+    description: config.description,
+    ownerAddress: ownerAccount.address,
+    creatorAddress: config.creatorAddress,
+    registrationMode: config.domainMode,
+    agentWalletAddress: record.walletAddress,
+    ensName: record.ensName,
+    agentUri: record.erc8004AgentUri ?? record.policyUri,
+    policyUri: record.policyUri,
+    policyCid: record.policyCid,
+    bitgoWalletId: record.walletId,
+    registrationTxHash: record.registrationTx,
+    active: true,
+    supportedChains: config.allowedChains ?? ["base-sepolia"],
+    supportedTokens: config.allowedTokens ?? ["USDC"],
+  } as any);
+}
+
+async function runAgentCreationJob(
+  jobId: string,
+  config: NormalizedSimpleCreateRequest,
+): Promise<void> {
+  startAgentCreationJob(jobId);
+  appendAgentCreationJobLog(jobId, '[createAgent] Job accepted by API');
+  appendAgentCreationJobLog(jobId, `  Creator wallet: ${config.creatorAddress}`);
+  appendAgentCreationJobLog(jobId, `  Domain mode: ${config.domainMode}`);
+
+  try {
+    const record = await createSdkAgent(
+      config,
+      getRegistrationRuntimeEnv(),
+      {
+        logger: (message) => appendAgentCreationJobLog(jobId, message),
+      },
+    );
+
+    await persistCreatedAgent(config, record);
+    appendAgentCreationJobLog(jobId, "  Agent record saved in the server database");
+
+    completeAgentCreationJob(jobId, buildSuccessPayload(config, record));
+  } catch (error) {
+    const message = (error as Error).message;
+    appendAgentCreationJobLog(jobId, `  Agent creation failed: ${message}`);
+    failAgentCreationJob(jobId, message);
+  }
+}
+
+>>>>>>> 17b622a1415783978ca7541e4f3989b15b751134
 router.get("/readiness", (_req, res) => {
   const missing = getMissingSimpleCreateEnv();
+  const signingAddress = process.env.PRIVATE_KEY
+    ? getSigningAccount().address
+    : undefined;
 
   return res.json({
     ready: missing.length === 0,
     missing,
+    suggestedDomains: [...MANAGED_DOMAINS],
+    managedDomains: [...MANAGED_DOMAINS],
+    tokenOptions: ["USDC", "USDT"],
+    chainOptions: ["base-sepolia", "base"],
+    domainModes: [
+      {
+        id: "managed",
+        label: "Managed by VCR",
+        description: "One-click launch under vcrtcorp.eth. Backend signer writes ENS records on Sepolia.",
+      },
+      {
+        id: "self-owned",
+        label: "Self-owned ENS",
+        description: "Connect your wallet and pay ENS gas yourself. Registration handoff only in this release.",
+      },
+    ],
+    ensAppUrl: "https://app.ens.domains",
+    supportsSelfOwnedDomainAutomation: false,
+    signingAddress,
     sdkReferences: [
       "sdk/src/createAgent.ts",
       "sdk/src/types.ts",
@@ -201,6 +385,45 @@ router.get("/readiness", (_req, res) => {
       "sdk/src/ens.ts",
     ],
   });
+});
+
+router.post("/jobs", async (req, res) => {
+  try {
+    const missingEnv = getMissingSimpleCreateEnv();
+    if (missingEnv.length > 0) {
+      return res.status(503).json({
+        error: "Server is missing environment needed for SDK agent creation",
+        missing: missingEnv,
+      });
+    }
+
+    const config = normalizeSimpleCreateConfig(req.body as SimpleCreateAgentRequest);
+    if (config.domainMode === "self-owned") {
+      return res.status(409).json({
+        error: getSelfOwnedUnsupportedMessage(config.baseDomain),
+        domainMode: config.domainMode,
+        ensAppUrl: "https://app.ens.domains",
+      });
+    }
+    const job = createAgentCreationJob();
+    void runAgentCreationJob(job.id, config);
+
+    return res.status(202).json({
+      jobId: job.id,
+      status: job.status,
+    });
+  } catch (err) {
+    return res.status(400).json({ error: (err as Error).message });
+  }
+});
+
+router.get("/jobs/:jobId", (req, res) => {
+  const job = getAgentCreationJob(req.params.jobId);
+  if (!job) {
+    return res.status(404).json({ error: "Job not found" });
+  }
+
+  return res.json(job);
 });
 
 /**
@@ -227,6 +450,7 @@ router.post("/", async (req, res) => {
         });
       }
 
+<<<<<<< HEAD
       const config = normalizeSimpleCreateConfig(body);
       const record = await createSdkAgent(config, {
         BITGO_ACCESS_TOKEN: process.env.BITGO_ACCESS_TOKEN!,
@@ -281,6 +505,22 @@ router.post("/", async (req, res) => {
           "sdk/src/fileverse.ts",
           "sdk/src/ens.ts",
         ],
+=======
+      const config = normalizeSimpleCreateConfig(req.body as SimpleCreateAgentRequest);
+      if (config.domainMode === "self-owned") {
+        return res.status(409).json({
+          error: getSelfOwnedUnsupportedMessage(config.baseDomain),
+          domainMode: config.domainMode,
+          ensAppUrl: "https://app.ens.domains",
+        });
+      }
+      const record = await createSdkAgent(config, getRegistrationRuntimeEnv());
+      await persistCreatedAgent(config, record);
+
+      return res.status(201).json({
+        mode: "sdk-create-agent",
+        ...buildSuccessPayload(config, record),
+>>>>>>> 17b622a1415783978ca7541e4f3989b15b751134
       });
     }
 
