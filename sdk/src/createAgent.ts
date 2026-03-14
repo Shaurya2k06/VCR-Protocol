@@ -145,6 +145,7 @@ export async function createAgent(
     config.allowedRecipients,
     dailyLimitWei,
     maxPerTxWei,
+    true, // isTestnet
   );
 
   console.log(`   ✅  Wallet ID:          ${bitgoResult.walletId}`);
@@ -194,6 +195,13 @@ export async function createAgent(
     custodian:     "bitgo",
     network:       "hteth",
     policy_hash:   bitgoResult.policyHash,
+    enforcement: {
+      vcr_layer: true,
+      bitgo_native_policies: bitgoResult.nativePoliciesSet,
+      reason: bitgoResult.nativePoliciesSet
+        ? undefined
+        : "BitGo testnet does not support velocityLimit or advancedWhitelist rule types",
+    },
   };
 
   // ── Step 3: Pin draft policy to IPFS ─────────────────────────────────────

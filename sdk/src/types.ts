@@ -70,6 +70,14 @@ export interface VCRPolicy {
    * Allows self-referential verification.
    */
   ipfs_cid?: string;
+  /**
+   * Specifies which enforcement layers are active
+   */
+  enforcement?: {
+    vcr_layer: boolean;
+    bitgo_native_policies: boolean;
+    reason?: string;
+  };
 }
 
 // ─── Spend Verification ───────────────────────────────────────────────────────
@@ -229,6 +237,10 @@ export interface BitGoWalletResult {
   userKeyPrv: string;
   /** keccak256 of deterministic-serialized live BitGo wallet policy */
   policyHash: string;
+  /** The version of the wallet created (e.g. 2 or 3) */
+  walletVersion: number;
+  /** Whether native BitGo policies were successfully set (usually false on testnets) */
+  nativePoliciesSet: boolean;
 }
 
 export interface BitGoPolicy {
