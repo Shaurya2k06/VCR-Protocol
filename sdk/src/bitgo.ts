@@ -76,6 +76,11 @@ export async function createAgentWallet(
     );
 
   // ── Step 1: Generate wallet ────────────────────────────────────────────────
+  // NOTE: Do NOT pass multisigType here. The hteth coin's getDefaultMultisigType()
+  // returns 'tss', and explicitly passing multisigType:'onchain' causes the SDK to
+  // mix TSS key-creation paths with a non-TSS type, producing the error:
+  //   "walletVersion 3 is not compatible with independent key"
+  // walletVersion:3 alone is sufficient to get a standard 2-of-3 onchain wallet.
   const result = await bitgo.coin("hteth").wallets().generateWallet({
     label,
     passphrase: walletPassphrase,
