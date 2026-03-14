@@ -8,7 +8,7 @@ declare module "@fileverse/agents" {
     });
 
     setupStorage(namespace: string): Promise<unknown>;
-    create(output: string): Promise<{
+    create(output: string, metadata?: Record<string, unknown>): Promise<{
       hash: string;
       fileId: bigint | number | string;
       portalAddress?: string;
@@ -22,6 +22,7 @@ declare module "@fileverse/agents" {
     update(
       fileId: bigint | number | string,
       output: string,
+      metadata?: Record<string, unknown>,
     ): Promise<{ hash: string }>;
   }
 }

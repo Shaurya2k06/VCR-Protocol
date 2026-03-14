@@ -35,6 +35,7 @@ import {
   getVCRPolicyUri,
   getAgentRegistrationRecord,
   verifyAgentENSLink,
+  verifyERC8004Registration,
   resolveAgentPolicy,
   invalidatePolicyCache,
   canAgentSpend,
@@ -330,50 +331,44 @@ async function validateENS(
 // LAYER 4: ERC-8004 REGISTRATION
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function validateERC8004(agentId: number): Promise<boolean> {
+async function validateERC8004(ensName: string, agentId: number): Promise<boolean> {
   console.log("\n══════════════════════════════════════════");
   console.log("  LAYER 4: ERC-8004 REGISTRATION");
   console.log("══════════════════════════════════════════\n");
 
-  const REGISTRY_ABI = parseAbi([
-    "function ownerOf(uint256 agentId) view returns (address)",
-    "function tokenURI(uint256 agentId) view returns (string)",
-  ]);
+  const result = await verifyERC8004Registration(
+    agentId,
+    ensName,
+    account.address,
+  );
 
-  // R-1: Agent registered on-chain
-  try {
-    const owner = await publicClient.readContract({
-      address: "0x8004A818BFB912233c491871b3d84c89A494BD9e",
-      abi: REGISTRY_ABI,
-      functionName: "ownerOf",
-      args: [BigInt(agentId)],
-    });
-
-    if ((owner as string).toLowerCase() === account.address.toLowerCase()) {
-      pass("ERC-8004", `Agent #${agentId} owned by signer: ${owner}`);
-    } else {
-      warn("ERC-8004", `Agent #${agentId} owned by ${owner}, signer is ${account.address}`);
-    }
-  } catch (e) {
-    fail("ERC-8004", `Agent #${agentId} not found on-chain: ${(e as Error).message}`);
+  if (!result.valid) {
+    fail("ERC-8004", result.reason ?? "Verification failed");
     return false;
   }
 
-  // R-2: Agent URI
-  try {
-    const uri = await publicClient.readContract({
-      address: "0x8004A818BFB912233c491871b3d84c89A494BD9e",
-      abi: REGISTRY_ABI,
-      functionName: "tokenURI",
-      args: [BigInt(agentId)],
-    });
-    if (uri && (uri as string).startsWith("ipfs://")) {
-      pass("ERC-8004", `Agent URI is IPFS: ${(uri as string).slice(0, 40)}…`);
-    } else {
-      warn("ERC-8004", `Unexpected agent URI format: ${uri}`);
-    }
-  } catch (e) {
-    warn("ERC-8004", `Could not read tokenURI: ${(e as Error).message}`);
+  pass("ERC-8004", `Agent #${agentId} owned by signer: ${result.owner}`);
+  if (result.agentUri?.startsWith("ipfs://")) {
+    pass("ERC-8004", `Agent URI is IPFS: ${result.agentUri.slice(0, 40)}…`);
+  } else if (result.agentUri) {
+    warn("ERC-8004", `Unexpected agent URI format: ${result.agentUri}`);
+  } else {
+    fail("ERC-8004", "Agent URI missing");
+    return false;
+  }
+
+  if (result.hasMatchingRegistration) {
+    pass("ERC-8004", "Registration file self-references the correct registry and agentId");
+  } else {
+    fail("ERC-8004", "Registration file is missing the correct registry/agentId self-reference");
+    return false;
+  }
+
+  if (result.ensEndpoint?.toLowerCase() === ensName.toLowerCase()) {
+    pass("ERC-8004", `Registration file claims ENS endpoint: ${result.ensEndpoint}`);
+  } else {
+    fail("ERC-8004", `Registration file ENS endpoint mismatch: ${result.ensEndpoint ?? "none"}`);
+    return false;
   }
 
   return true;
@@ -395,6 +390,12 @@ async function validateENSIP25(ensName: string, agentId: number): Promise<boolea
       pass("ENSIP-25", `ENS record: "${result.ensRecord}"`);
       pass("ENSIP-25", `Registry owner: ${result.registryOwner}`);
       pass("ENSIP-25", `ENS owner: ${result.ensOwner}`);
+      if (result.agentUri) {
+        pass("ENSIP-25", `ERC-8004 agentURI: ${result.agentUri}`);
+      }
+      if (result.agentRegistrationEns) {
+        pass("ENSIP-25", `ERC-8004 registration claims ENS: ${result.agentRegistrationEns}`);
+      }
       return true;
     } else {
       fail("ENSIP-25", `Link invalid: ${result.reason}`);
@@ -724,7 +725,7 @@ async function main() {
 
   // ── LAYER 4: ERC-8004 ──────────────────────────────────────────────────────
   if (record.agentId !== undefined) {
-    await validateERC8004(record.agentId);
+    await validateERC8004(record.ensName, record.agentId);
   } else {
     warn("ERC-8004", "No agentId — skipping ERC-8004 layer");
   }

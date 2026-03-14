@@ -18,6 +18,7 @@ export type {
   SpendSummary,
   // Agent lifecycle
   CreateAgentConfig,
+  UpdateAgentPolicyConfig,
   AgentRecord,
   // ENSIP-25
   ENSAgentLink,
@@ -31,8 +32,11 @@ export type {
   // ERC-8004
   AgentMetadata,
   AgentService,
+  ERC8004VerificationResult,
   // x402
   X402PaymentRequirement,
+  X402PaymentAuthorization,
+  X402SignedRequest,
   // IPFS
   PinResult,
   FileversePolicyResult,
@@ -88,8 +92,12 @@ export { verifyPolicyIntegrity } from "./verifyIntegrity.js";
 // ─── Agent Lifecycle ──────────────────────────────────────────────────────────
 
 export { createAgent } from "./createAgent.js";
+export { updateAgentPolicy } from "./updateAgentPolicy.js";
 export {
   buildPolicyNamespace,
+  appendPolicyVersion,
+  getFileverseActivityUrl,
+  normalizePolicyNamespace,
   storePolicyDocument,
 } from "./fileverse.js";
 
@@ -117,11 +125,16 @@ export {
   ERC8004_ADDRESSES,
   registerAgent,
   waitForAgentRegistration,
+  getAgentURI,
   getAgentOwner,
+  setAgentURI,
   setAgentMetadata,
   setAgentWallet,
   getAgentReputation,
   buildAgentMetadataJson,
+  findAgentRegistrationEns,
+  resolveAgentRegistration,
+  verifyERC8004Registration,
 } from "./erc8004.js";
 export type { RegistrationResult, ReputationSummary } from "./erc8004.js";
 
@@ -149,7 +162,10 @@ export {
   X402_FACILITATOR,
   vcrPaymentMiddleware,
   parsePaymentRequired,
+  parsePaymentSignatureHeader,
   buildEIP3009TypedData,
+  createSignedPaymentRequest,
+  fetchWithVCRPayment,
 } from "./x402.js";
 export type { VCRPaymentOptions, VCRClientOptions } from "./x402.js";
 
