@@ -1,5 +1,6 @@
 import fs from "fs/promises";
 import path from "path";
+import { privateKeyToAccount } from "viem/accounts";
 
 import { buildPolicyGatewayUrl, setVCRPolicyRecord } from "./ens.js";
 import {
@@ -41,6 +42,22 @@ export async function updateAgentPolicy(
   const raw = await fs.readFile(recordPath, "utf8");
   const record = JSON.parse(raw) as AgentRecord & { walletPassphrase?: string };
 
+  if (
+    record.ensMode === "user-root" &&
+    record.ensManagerAddress &&
+    process.env.PRIVATE_KEY
+  ) {
+    const signer = privateKeyToAccount(process.env.PRIVATE_KEY as `0x${string}`).address;
+    const strictManagerCheck = (process.env.VCR_STRICT_ENS_MANAGER_CHECK ?? "false")
+      .toLowerCase() === "true";
+    if (record.ensManagerAddress.toLowerCase() !== signer.toLowerCase() && strictManagerCheck) {
+      throw new Error(
+        `ENS updates for "${record.ensName}" are controlled by ${record.ensManagerAddress}. ` +
+        `Run with that manager wallet as PRIVATE_KEY or delegate Public Resolver approval first.`,
+      );
+    }
+  }
+
   const policy: VCRPolicy = {
     version: "1.0",
     agentId: `eip155:11155111:${ERC8004_ADDRESSES.identityRegistry.sepolia}:${record.agentId}`,
@@ -64,8 +81,12 @@ export async function updateAgentPolicy(
   const storedPolicy = await appendPolicyVersion(policy, namespace);
   const policyUri = storedPolicy.contentUri;
   const policyCid = policyUri.startsWith("ipfs://") ? policyUri.slice(7) : policyUri;
-  const policyGatewayUrl = buildPolicyGatewayUrl(policyUri);
-  const ensResult = await setVCRPolicyRecord(record.ensName, policyUri);
+  const policyGatewayUrl = storedPolicy.viewerUrl ?? buildPolicyGatewayUrl(policyUri);
+  const ensResult = await setVCRPolicyRecord(record.ensName, policyUri, {
+    managerAddress: record.ensManagerAddress as `0x${string}` | undefined,
+    ownerAddress: record.ensOwnerAddress as `0x${string}` | undefined,
+    policyTextValue: storedPolicy.viewerUrl,
+  });
 
   const updatedRecord: AgentRecord & { walletPassphrase?: string } = {
     ...record,

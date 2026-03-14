@@ -4,7 +4,7 @@
 
 import type { VCRPolicy } from "./types.js";
 import { getVCRPolicyUri } from "./ens.js";
-import { extractPolicyCid } from "./policy.js";
+import { extractPolicyCid, parsePolicyDocument } from "./policy.js";
 
 // ─── Cache ────────────────────────────────────────────────────────────────────
 
@@ -47,7 +47,8 @@ async function fetchFromIPFS(cid: string): Promise<VCRPolicy> {
         signal: AbortSignal.timeout(5000),
       });
       if (res.ok) {
-        return (await res.json()) as VCRPolicy;
+        const payload = await res.text();
+        return parsePolicyDocument(payload);
       }
       lastError = new Error(`HTTP ${res.status} from ${url}`);
     } catch (err) {
