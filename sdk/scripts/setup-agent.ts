@@ -22,6 +22,7 @@
 //   agents/<name>.key    — plaintext BitGo user key (git-ignored, mode 0o600)
 
 import "dotenv/config";
+import { inspect } from "util";
 import { createAgent } from "../src/createAgent.js";
 import type { CreateAgentConfig } from "../src/types.js";
 
@@ -411,7 +412,7 @@ async function main(): Promise<void> {
     console.log(`    2. canAgentSpend("${record.ensName}", { amount, token, recipient, chain })`);
     console.log(`    3. BitGo wallet is ready at: ${record.walletAddress}\n`);
   } catch (err) {
-    const message = (err as Error).message;
+    const message = describeUnknownError(err);
     console.error(`\n❌  Agent creation failed:\n   ${message}\n`);
 
     // Provide actionable hints for common failures
@@ -431,3 +432,15 @@ async function main(): Promise<void> {
 }
 
 main();
+
+function describeUnknownError(error: unknown): string {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+
+  if (typeof error === "string" && error.trim()) {
+    return error;
+  }
+
+  return inspect(error, { depth: 6, breakLength: 120 });
+}
