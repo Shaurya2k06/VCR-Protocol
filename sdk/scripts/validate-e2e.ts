@@ -27,7 +27,11 @@ import {
   CONTRACTS,
   CHAIN_IDS,
   buildAgentRegistrationKey,
+  buildPolicyGatewayUrl,
   encodeERC7930,
+  extractPolicyCid,
+  getLegacyVCRPolicyText,
+  getVCRPolicyContenthashUri,
   getVCRPolicyUri,
   getAgentRegistrationRecord,
   verifyAgentENSLink,
@@ -85,16 +89,32 @@ function findAgentRecord(): { record: any; name: string } | null {
   if (!fs.existsSync(agentsDir)) return null;
   const files = fs.readdirSync(agentsDir).filter((f) => f.endsWith(".json"));
   if (files.length === 0) return null;
-  // Use the most recently modified agent file
+  // Prefer the record's own createdAt timestamp so backfills or manual edits
+  // on older files do not accidentally become the "latest" agent.
   const sorted = files
-    .map((f) => ({
-      name: f.replace(".json", ""),
-      path: path.join(agentsDir, f),
-      mtime: fs.statSync(path.join(agentsDir, f)).mtimeMs,
-    }))
-    .sort((a, b) => b.mtime - a.mtime);
+    .map((f) => {
+      const recordPath = path.join(agentsDir, f);
+      const raw = fs.readFileSync(recordPath, "utf8");
+      const record = JSON.parse(raw);
+      const createdAtMs = typeof record.createdAt === "string"
+        ? Date.parse(record.createdAt)
+        : Number.NaN;
+      return {
+        name: f.replace(".json", ""),
+        path: recordPath,
+        record,
+        createdAtMs: Number.isFinite(createdAtMs) ? createdAtMs : -1,
+        mtimeMs: fs.statSync(recordPath).mtimeMs,
+      };
+    })
+    .sort((a, b) => {
+      if (b.createdAtMs !== a.createdAtMs) {
+        return b.createdAtMs - a.createdAtMs;
+      }
+      return b.mtimeMs - a.mtimeMs;
+    });
   const latest = sorted[0]!;
-  return { record: JSON.parse(fs.readFileSync(latest.path, "utf8")), name: latest.name };
+  return { record: latest.record, name: latest.name };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -219,24 +239,51 @@ async function validateENS(
   agentId: number,
 ): Promise<boolean> {
   console.log("\n══════════════════════════════════════════");
-  console.log("  LAYER 3: ENS TEXT RECORDS");
+  console.log("  LAYER 3: ENS RECORDS");
   console.log("══════════════════════════════════════════\n");
 
   let allPassed = true;
 
-  // E-1: vcr.policy record
-  const policyUri = await getVCRPolicyUri(ensName);
-  if (policyUri === `ipfs://${policyCid}`) {
-    pass("ENS", `vcr.policy record matches: ${policyUri}`);
-  } else if (policyUri) {
-    fail("ENS", `vcr.policy mismatch — got: ${policyUri}, expected: ipfs://${policyCid}`);
+  // E-1: contenthash record
+  const contenthashUri = await getVCRPolicyContenthashUri(ensName);
+  if (contenthashUri === `ipfs://${policyCid}`) {
+    pass("ENS", `contenthash matches: ${contenthashUri}`);
+  } else if (contenthashUri) {
+    fail("ENS", `contenthash mismatch — got: ${contenthashUri}, expected: ipfs://${policyCid}`);
     allPassed = false;
   } else {
-    fail("ENS", `vcr.policy record not set for ${ensName}`);
+    fail("ENS", `contenthash record not set for ${ensName}`);
     allPassed = false;
   }
 
-  // E-2: ENSIP-25 agent-registration record
+  // E-2: legacy vcr.policy text record for explorer friendliness
+  const legacyPolicyText = await getLegacyVCRPolicyText(ensName);
+  const expectedGatewayUrl = buildPolicyGatewayUrl(policyCid);
+  if (legacyPolicyText === expectedGatewayUrl) {
+    pass("ENS", `vcr.policy text matches gateway URL: ${legacyPolicyText}`);
+  } else if (legacyPolicyText && extractPolicyCid(legacyPolicyText) === policyCid) {
+    warn("ENS", `vcr.policy points to the right CID but not the preferred gateway URL: ${legacyPolicyText}`);
+  } else if (legacyPolicyText) {
+    fail("ENS", `vcr.policy mismatch — got: ${legacyPolicyText}, expected: ${expectedGatewayUrl}`);
+    allPassed = false;
+  } else {
+    fail("ENS", `vcr.policy text record not set for ${ensName}`);
+    allPassed = false;
+  }
+
+  // E-3: canonical resolver helper should prefer contenthash
+  const policyUri = await getVCRPolicyUri(ensName);
+  if (policyUri === `ipfs://${policyCid}`) {
+    pass("ENS", `getVCRPolicyUri resolves canonical IPFS URI: ${policyUri}`);
+  } else if (policyUri) {
+    fail("ENS", `getVCRPolicyUri mismatch — got: ${policyUri}, expected: ipfs://${policyCid}`);
+    allPassed = false;
+  } else {
+    fail("ENS", `getVCRPolicyUri returned null for ${ensName}`);
+    allPassed = false;
+  }
+
+  // E-4: ENSIP-25 agent-registration record
   const agentReg = await getAgentRegistrationRecord(ensName, agentId);
   if (agentReg === "1") {
     pass("ENS", `ENSIP-25 agent-registration record is "1" (active)`);
@@ -247,7 +294,7 @@ async function validateENS(
     allPassed = false;
   }
 
-  // E-3: Key encoding check
+  // E-5: Key encoding check
   const key = buildAgentRegistrationKey(
     "0x8004A818BFB912233c491871b3d84c89A494BD9e",
     11155111,
@@ -261,7 +308,7 @@ async function validateENS(
     allPassed = false;
   }
 
-  // E-4: Resolver check
+  // E-6: Resolver check
   try {
     const resolverAddr = await publicClient.getEnsResolver({
       name: normalize(ensName),

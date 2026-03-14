@@ -1,4 +1,4 @@
-import { fetchPolicy } from "./policy.js";
+import { extractPolicyCid, fetchPolicy } from "./policy.js";
 import { getVCRPolicyUri } from "./ens.js";
 import type { SpendRequest, SpendResult, VCRPolicy } from "./types.js";
 
@@ -40,12 +40,12 @@ export async function canAgentSpend(
   }
 
   if (!policyUri) {
-    return { allowed: false, reason: "No vcr.policy text record found on ENS" };
+    return { allowed: false, reason: "No VCR policy pointer found on ENS" };
   }
 
   // ── 2. Fetch policy JSON from IPFS ──────────────────────────────────────────
   let policy: VCRPolicy;
-  const policyCid = policyUri.replace(/^ipfs:\/\//, "");
+  const policyCid = extractPolicyCid(policyUri);
   try {
     policy = await fetchPolicy(policyUri);
   } catch (err) {
