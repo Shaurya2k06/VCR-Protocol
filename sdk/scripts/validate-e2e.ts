@@ -393,9 +393,12 @@ async function validateCanAgentSpend(policy: VCRPolicy): Promise<void> {
 
   // CA-2: Blocked — wrong recipient
   {
+    const badRecipient = validRecipient.toLowerCase() === "0x1234567890123456789012345678901234567890" 
+      ? "0x000000000000000000000000000000000000dead"
+      : "0x1234567890123456789012345678901234567890";
     const result = canAgentSpendWithPolicy(
       policy,
-      { amount: "100000", token: validToken, recipient: "0x1234567890123456789012345678901234567890", chain: validChain },
+      { amount: "100000", token: validToken, recipient: badRecipient, chain: validChain },
       "0",
     );
     if (!result.allowed && result.reason?.toLowerCase().includes("whitelist")) {

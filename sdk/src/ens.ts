@@ -1,3 +1,5 @@
+import { getWalletClient } from "./client.js";
+
 // ─── ENS Integration — ENSIP-25 + VCR Policy Text Records ────────────────────
 import {
   createPublicClient,
@@ -119,18 +121,6 @@ function getPublicClient() {
   return createPublicClient({ chain: sepolia, transport: http(rpcUrl) });
 }
 
-function getWalletClient() {
-  const rpcUrl = process.env.SEPOLIA_RPC_URL;
-  const privateKey = process.env.PRIVATE_KEY as `0x${string}`;
-  if (!rpcUrl || !privateKey)
-    throw new Error("SEPOLIA_RPC_URL and PRIVATE_KEY must be set");
-  const account = privateKeyToAccount(privateKey);
-  return createWalletClient({
-    account,
-    chain: sepolia,
-    transport: http(rpcUrl),
-  });
-}
 
 // ─── Text Record ABI ──────────────────────────────────────────────────────────
 
@@ -148,7 +138,7 @@ export async function setVCRPolicyRecord(
   ensName: string,
   policyUri: string,
 ): Promise<ENSSetResult> {
-  const walletClient = getWalletClient();
+  const walletClient = await getWalletClient();
   await ensureSubdomainExists(ensName);
   const node = namehash(normalize(ensName));
   const resolver = ENS_ADDRESSES.publicResolverSepolia;
@@ -173,7 +163,7 @@ export async function setAgentRegistrationRecord(
   registryAddress = ERC8004_REGISTRY_SEPOLIA,
   chainId = 11155111,
 ): Promise<ENSSetResult> {
-  const walletClient = getWalletClient();
+  const walletClient = await getWalletClient();
   await ensureSubdomainExists(ensName);
   const node = namehash(normalize(ensName));
   const resolver = ENS_ADDRESSES.publicResolverSepolia;
@@ -199,7 +189,7 @@ export async function setAllENSRecords(
   registryAddress = ERC8004_REGISTRY_SEPOLIA,
   chainId = 11155111,
 ): Promise<{ txHash: string }> {
-  const walletClient = getWalletClient();
+  const walletClient = await getWalletClient();
   await ensureSubdomainExists(ensName);
   const node = namehash(normalize(ensName));
   const resolver = ENS_ADDRESSES.publicResolverSepolia;
@@ -247,7 +237,7 @@ function computeSubnodeHash(parentNode: `0x${string}`, sublabel: string): `0x${s
  * Creates the subdomain if it doesn't exist; skips if it already does.
  */
 async function ensureSubdomainExists(ensName: string): Promise<void> {
-  const walletClient = getWalletClient();
+  const walletClient = await getWalletClient();
   const publicClient = getPublicClient();
   const signerAddress = walletClient.account!.address as `0x${string}`;
   const resolver = ENS_ADDRESSES.publicResolverSepolia;

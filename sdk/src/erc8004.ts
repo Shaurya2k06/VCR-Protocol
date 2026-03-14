@@ -1,3 +1,5 @@
+import { getWalletClient } from "./client.js";
+
 // ─── ERC-8004 Agent Registration ──────────────────────────────────────────────
 import {
   createPublicClient,
@@ -58,18 +60,6 @@ function getPublicClient() {
   return createPublicClient({ chain: sepolia, transport: http(rpcUrl) });
 }
 
-function getWalletClient() {
-  const rpcUrl = process.env.SEPOLIA_RPC_URL;
-  const privateKey = process.env.PRIVATE_KEY as `0x${string}`;
-  if (!rpcUrl || !privateKey)
-    throw new Error("SEPOLIA_RPC_URL and PRIVATE_KEY must be set");
-  const account = privateKeyToAccount(privateKey);
-  return createWalletClient({
-    account,
-    chain: sepolia,
-    transport: http(rpcUrl),
-  });
-}
 
 // ─── Registration ─────────────────────────────────────────────────────────────
 
@@ -87,7 +77,7 @@ export interface RegistrationResult {
 export async function registerAgent(
   agentUri: string,
 ): Promise<{ txHash: string }> {
-  const walletClient = getWalletClient();
+  const walletClient = await getWalletClient();
 
   const txHash = await walletClient.writeContract({
     address: ERC8004_ADDRESSES.identityRegistry.sepolia,
@@ -196,7 +186,7 @@ export async function setAgentMetadata(
   key: string,
   value: string,
 ): Promise<string> {
-  const walletClient = getWalletClient();
+  const walletClient = await getWalletClient();
 
   const txHash = await walletClient.writeContract({
     address: ERC8004_ADDRESSES.identityRegistry.sepolia,
@@ -233,7 +223,7 @@ export async function setAgentWallet(
   walletPassphrase?: string,
   deadlineSeconds = 60,
 ): Promise<string> {
-  const txWalletClient = getWalletClient();
+  const txWalletClient = await getWalletClient();
   const account = privateKeyToAccount(process.env.PRIVATE_KEY as `0x${string}`);
 
   // ERC-8004 enforces: deadline must be <= block.timestamp + 5 minutes
