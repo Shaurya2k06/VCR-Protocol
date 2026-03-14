@@ -165,19 +165,22 @@ function decodeIpfsContenthashRecord(contenthash: string | null): string | null 
   }
 }
 
-function logEns(message: string): void {
-  console.log(`      [ENS] ${message}`);
+function logEns(message: string, logger?: (message: string) => void): void {
+  const formatted = `      [ENS] ${message}`;
+  console.log(formatted);
+  logger?.(formatted);
 }
 
 async function withEnsProgressLog<T>(
   message: string,
   promise: Promise<T>,
+  logger?: (message: string) => void,
   intervalMs = 15_000,
 ): Promise<T> {
   const startedAt = Date.now();
   const timer = setInterval(() => {
     const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000);
-    logEns(`${message} (${elapsedSeconds}s elapsed)`);
+    logEns(`${message} (${elapsedSeconds}s elapsed)`, logger);
   }, intervalMs);
 
   try {
@@ -262,21 +265,22 @@ export async function setAllENSRecords(
   policyUriOrCid: string,
   registryAddress = ERC8004_REGISTRY_SEPOLIA,
   chainId = 11155111,
+  logger?: (message: string) => void,
 ): Promise<{ txHash: string }> {
   const walletClient = getEOAWalletClient();
   const publicClient = getPublicClient();
-  logEns(`Preparing ENS records for ${ensName}`);
-  await ensureSubdomainExists(ensName);
+  logEns(`Preparing ENS records for ${ensName}`, logger);
+  await ensureSubdomainExists(ensName, logger);
   const node = namehash(normalize(ensName));
   const resolver = ENS_ADDRESSES.publicResolverSepolia;
   const agentKey = buildAgentRegistrationKey(registryAddress, chainId, agentId);
   const gatewayUrl = buildPolicyGatewayUrl(policyUriOrCid);
   const ipfsUri = normalizeIpfsUri(policyUriOrCid);
 
-  logEns(`Resolver: ${resolver}`);
-  logEns(`ENSIP-25 key: ${agentKey}`);
-  logEns(`Policy contenthash target: ${ipfsUri}`);
-  logEns(`Legacy text fallback: ${gatewayUrl}`);
+  logEns(`Resolver: ${resolver}`, logger);
+  logEns(`ENSIP-25 key: ${agentKey}`, logger);
+  logEns(`Policy contenthash target: ${ipfsUri}`, logger);
+  logEns(`Legacy text fallback: ${gatewayUrl}`, logger);
 
   const encodedAgentRegistration = encodeFunctionData({
     abi: resolverAbi,
@@ -296,7 +300,7 @@ export async function setAllENSRecords(
     args: [node, "vcr.policy", gatewayUrl],
   });
 
-  logEns("Submitting resolver multicall transaction...");
+  logEns("Submitting resolver multicall transaction...", logger);
   const txHash = await withEnsProgressLog(
     "Waiting for resolver multicall transaction hash",
     walletClient.writeContract({
@@ -305,15 +309,17 @@ export async function setAllENSRecords(
       functionName: "multicall",
       args: [[encodedAgentRegistration, encodedPolicyPointer, encodedLegacyPolicyText]],
     }),
+    logger,
   );
-  logEns(`Resolver multicall tx submitted: ${txHash}`);
-  logEns("Waiting for ENS multicall receipt...");
+  logEns(`Resolver multicall tx submitted: ${txHash}`, logger);
+  logEns("Waiting for ENS multicall receipt...", logger);
 
   const receipt = await withEnsProgressLog(
     "Still waiting for ENS multicall receipt",
     publicClient.waitForTransactionReceipt({ hash: txHash }),
+    logger,
   );
-  logEns(`ENS records confirmed in block ${receipt.blockNumber.toString()}`);
+  logEns(`ENS records confirmed in block ${receipt.blockNumber.toString()}`, logger);
 
   return { txHash };
 }
@@ -336,7 +342,10 @@ function computeSubnodeHash(parentNode: `0x${string}`, sublabel: string): `0x${s
  * Handles both wrapped (NameWrapper) and unwrapped parent domains.
  * Creates the subdomain if it doesn't exist; skips if it already does.
  */
-async function ensureSubdomainExists(ensName: string): Promise<void> {
+async function ensureSubdomainExists(
+  ensName: string,
+  logger?: (message: string) => void,
+): Promise<void> {
   const walletClient = getEOAWalletClient();
   const publicClient = getPublicClient();
   const signerAddress = walletClient.account!.address as `0x${string}`;
@@ -350,8 +359,8 @@ async function ensureSubdomainExists(ensName: string): Promise<void> {
   }
   const sublabel = labels[0]!;
   const parentDomain = labels.slice(1).join(".");
-  logEns(`Checking subdomain state for ${ensName}`);
-  logEns(`Parent domain: ${parentDomain}`);
+  logEns(`Checking subdomain state for ${ensName}`, logger);
+  logEns(`Parent domain: ${parentDomain}`, logger);
 
   const parentNode = namehash(normalize(parentDomain)) as `0x${string}`;
   const subnodeHash = computeSubnodeHash(parentNode, sublabel);
@@ -365,11 +374,11 @@ async function ensureSubdomainExists(ensName: string): Promise<void> {
   }) as `0x${string}`;
 
   if (subnodeOwner !== "0x0000000000000000000000000000000000000000") {
-    logEns(`Subdomain already exists with owner ${subnodeOwner}`);
+    logEns(`Subdomain already exists with owner ${subnodeOwner}`, logger);
     return;
   }
 
-  logEns("Subdomain does not exist yet. A creation transaction will be needed.");
+  logEns("Subdomain does not exist yet. A creation transaction will be needed.", logger);
 
   // Subdomain doesn't exist — need to create it.
   // Detect whether the parent domain is wrapped in the NameWrapper.
@@ -389,8 +398,8 @@ async function ensureSubdomainExists(ensName: string): Promise<void> {
   }
 
   const parentIsWrapped = parentRegistryOwner.toLowerCase() === NAME_WRAPPER_SEPOLIA.toLowerCase();
-  logEns(`Parent domain owner: ${parentRegistryOwner}`);
-  logEns(`Parent domain wrapper mode: ${parentIsWrapped ? "wrapped" : "unwrapped"}`);
+  logEns(`Parent domain owner: ${parentRegistryOwner}`, logger);
+  logEns(`Parent domain wrapper mode: ${parentIsWrapped ? "wrapped" : "unwrapped"}`, logger);
 
   if (!parentIsWrapped && parentRegistryOwner.toLowerCase() !== signerAddress.toLowerCase()) {
     throw new Error(
@@ -426,7 +435,7 @@ async function ensureSubdomainExists(ensName: string): Promise<void> {
     }
   }
 
-  logEns(`Creating subdomain ${ensName}...`);
+  logEns(`Creating subdomain ${ensName}...`, logger);
 
   let subTxHash: `0x${string}`;
 
@@ -440,6 +449,7 @@ async function ensureSubdomainExists(ensName: string): Promise<void> {
         functionName: "setSubnodeRecord",
         args: [parentNode, sublabel, signerAddress, resolver, 0n, 0, expiryTimestamp],
       }),
+      logger,
     );
   } else {
     subTxHash = await withEnsProgressLog(
@@ -450,16 +460,18 @@ async function ensureSubdomainExists(ensName: string): Promise<void> {
         functionName: "setSubnodeRecord",
         args: [parentNode, labelhash(sublabel) as `0x${string}`, signerAddress, resolver, 0n],
       }),
+      logger,
     );
   }
 
-  logEns(`Subdomain creation tx submitted: ${subTxHash}`);
-  logEns("Waiting for subdomain creation receipt...");
+  logEns(`Subdomain creation tx submitted: ${subTxHash}`, logger);
+  logEns("Waiting for subdomain creation receipt...", logger);
   await withEnsProgressLog(
     "Still waiting for subdomain creation receipt",
     publicClient.waitForTransactionReceipt({ hash: subTxHash }),
+    logger,
   );
-  logEns(`Subdomain ${ensName} created successfully`);
+  logEns(`Subdomain ${ensName} created successfully`, logger);
 }
 
 // ─── Read Operations ──────────────────────────────────────────────────────────

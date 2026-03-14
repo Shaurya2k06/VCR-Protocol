@@ -56,23 +56,32 @@ async function pinJson(
   return result.cid;
 }
 
-function logCreateAgent(message: string): void {
-  console.log(`[createAgent] ${message}`);
+function emitCreateAgentLog(
+  message: string,
+  logger?: (message: string) => void,
+): void {
+  console.log(message);
+  logger?.(message);
 }
 
-function logCreateAgentDetail(message: string): void {
-  console.log(`  ${message}`);
+function logCreateAgent(message: string, logger?: (message: string) => void): void {
+  emitCreateAgentLog(`[createAgent] ${message}`, logger);
+}
+
+function logCreateAgentDetail(message: string, logger?: (message: string) => void): void {
+  emitCreateAgentLog(`  ${message}`, logger);
 }
 
 async function withCreateAgentProgressLog<T>(
   message: string,
   promise: Promise<T>,
+  logger?: (message: string) => void,
   intervalMs = 15_000,
 ): Promise<T> {
   const startedAt = Date.now();
   const timer = setInterval(() => {
     const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000);
-    logCreateAgentDetail(`${message} (${elapsedSeconds}s elapsed)`);
+    logCreateAgentDetail(`${message} (${elapsedSeconds}s elapsed)`, logger);
   }, intervalMs);
 
   try {
@@ -129,6 +138,9 @@ export async function createAgent(
     PRIVATE_KEY: string;
     SEPOLIA_RPC_URL: string;
   },
+  options?: {
+    logger?: (message: string) => void;
+  },
 ): Promise<AgentRecord> {
   // Inject env vars so downstream helpers (bitgo.ts, erc8004.ts, ens.ts)
   // can pick them up without requiring refactored signatures.
@@ -141,7 +153,7 @@ export async function createAgent(
   process.env.SEPOLIA_RPC_URL     = env.SEPOLIA_RPC_URL;
 
   console.log("");
-  logCreateAgent(`Creating agent "${config.name}"`);
+  logCreateAgent(`Creating agent "${config.name}"`, options?.logger);
 
   const account = privateKeyToAccount(env.PRIVATE_KEY as `0x${string}`);
 
@@ -149,7 +161,7 @@ export async function createAgent(
   const ensName = `${config.name}.${config.baseDomain}`;
 
   // ── Step 1: BitGo wallet ──────────────────────────────────────────────────
-  console.log("[1/5] Creating BitGo wallet (Hoodi testnet)");
+  emitCreateAgentLog("[1/5] Creating BitGo wallet (Hoodi testnet)", options?.logger);
 
   // BitGo velocity limits are in WEI, NOT USD or USDC base units.
   // We use ETH-equivalent wei here (18 decimals) for the on-chain policy.
@@ -168,45 +180,54 @@ export async function createAgent(
     true, // isTestnet
   );
 
-  logCreateAgentDetail(`Wallet ID: ${bitgoResult.walletId}`);
-  logCreateAgentDetail(`Forwarder address: ${bitgoResult.forwarderAddress}`);
+  logCreateAgentDetail(`Wallet ID: ${bitgoResult.walletId}`, options?.logger);
+  logCreateAgentDetail(`Forwarder address: ${bitgoResult.forwarderAddress}`, options?.logger);
   if (bitgoResult.userKeyPrv) {
     logCreateAgentDetail(
       `Captured userKeyPrv once (first 20 chars): ${bitgoResult.userKeyPrv.slice(0, 20)}...`,
+      options?.logger,
     );
   } else {
-    logCreateAgentDetail("BitGo did not return userKeyPrv for this wallet creation flow");
+    logCreateAgentDetail(
+      "BitGo did not return userKeyPrv for this wallet creation flow",
+      options?.logger,
+    );
   }
-  logCreateAgentDetail(`Policy hash: ${bitgoResult.policyHash}`);
+  logCreateAgentDetail(`Policy hash: ${bitgoResult.policyHash}`, options?.logger);
 
   const allowedChains  = config.allowedChains  ?? ["base-sepolia"];
   const allowedTokens  = config.allowedTokens  ?? ["USDC"];
   const primaryChain   = allowedChains[0]!;
 
   // ── Step 2: Register on ERC-8004 ─────────────────────────────────────────
-  console.log("[2/5] Registering ERC-8004 agent NFT on Sepolia");
+  emitCreateAgentLog("[2/5] Registering ERC-8004 agent NFT on Sepolia", options?.logger);
 
   // Register first so the final ERC-8004 registration file can self-reference
   // its real on-chain agentId in the `registrations` section.
-  logCreateAgentDetail("Submitting register() transaction...");
+  logCreateAgentDetail("Submitting register() transaction...", options?.logger);
   const { txHash: regTxHash } = await withCreateAgentProgressLog(
     "Waiting for ERC-8004 register() transaction hash",
     registerAgent(),
+    options?.logger,
   );
-  logCreateAgentDetail(`register() tx submitted: ${regTxHash}`);
-  logCreateAgentDetail("Waiting for ERC-8004 registration receipt and AgentRegistered event...");
+  logCreateAgentDetail(`register() tx submitted: ${regTxHash}`, options?.logger);
+  logCreateAgentDetail(
+    "Waiting for ERC-8004 registration receipt and AgentRegistered event...",
+    options?.logger,
+  );
 
   const { agentId, txHash: registrationTx } =
     await withCreateAgentProgressLog(
       "Still waiting for ERC-8004 registration confirmation",
       waitForAgentRegistration(regTxHash),
+      options?.logger,
     );
 
-  logCreateAgentDetail(`Agent ID: ${agentId}`);
-  logCreateAgentDetail(`ERC-8004 registration confirmed: ${registrationTx}`);
+  logCreateAgentDetail(`Agent ID: ${agentId}`, options?.logger);
+  logCreateAgentDetail(`ERC-8004 registration confirmed: ${registrationTx}`, options?.logger);
 
   // ── Step 3: Build the final policy document ───────────────────────────────
-  console.log("[3/5] Building final VCR policy document");
+  emitCreateAgentLog("[3/5] Building final VCR policy document", options?.logger);
 
   // USDC amounts use 6 decimals
   const maxTxUsdc   = parseUnits(config.maxPerTxUsdc,   6).toString();
@@ -253,19 +274,20 @@ export async function createAgent(
   };
 
   // ── Step 4: Store the policy document via Fileverse ───────────────────────
-  console.log("[4/5] Storing policy JSON via Fileverse");
+  emitCreateAgentLog("[4/5] Storing policy JSON via Fileverse", options?.logger);
   const policyNamespace = buildPolicyNamespace(config.name);
-  logCreateAgentDetail(`Fileverse namespace: ${policyNamespace}`);
+  logCreateAgentDetail(`Fileverse namespace: ${policyNamespace}`, options?.logger);
   const storedPolicy = await withCreateAgentProgressLog(
     "Still waiting for Fileverse policy storage",
     storePolicyDocument(finalPolicy, policyNamespace),
+    options?.logger,
   );
   const policyUri = storedPolicy.contentUri;
   const policyCid = policyUri.startsWith("ipfs://") ? policyUri.slice(7) : policyUri;
   const policyGatewayUrl = buildPolicyGatewayUrl(policyUri);
-  logCreateAgentDetail(`Policy URI: ${policyUri}`);
-  logCreateAgentDetail(`Gateway URL: ${policyGatewayUrl}`);
-  logCreateAgentDetail(`Fileverse file ID: ${storedPolicy.fileId}`);
+  logCreateAgentDetail(`Policy URI: ${policyUri}`, options?.logger);
+  logCreateAgentDetail(`Gateway URL: ${policyGatewayUrl}`, options?.logger);
+  logCreateAgentDetail(`Fileverse file ID: ${storedPolicy.fileId}`, options?.logger);
 
   // ── Step 4b: Finalize ERC-8004 agentURI with full registration metadata ──
   const agentCard = buildAgentMetadataJson(
@@ -282,38 +304,42 @@ export async function createAgent(
     11155111,
   );
 
-  logCreateAgentDetail("Pinning final ERC-8004 agent card...");
+  logCreateAgentDetail("Pinning final ERC-8004 agent card...", options?.logger);
   const agentCardCid = await pinJson(
     agentCard,
     env.PINATA_JWT,
     env.PINATA_GATEWAY,
   );
   const agentCardUri = `ipfs://${agentCardCid}`;
-  logCreateAgentDetail(`Pinned ERC-8004 agent card: ${agentCardUri}`);
-  logCreateAgentDetail(`Submitting setAgentURI(${agentId})...`);
+  logCreateAgentDetail(`Pinned ERC-8004 agent card: ${agentCardUri}`, options?.logger);
+  logCreateAgentDetail(`Submitting setAgentURI(${agentId})...`, options?.logger);
   const agentUriTx = await withCreateAgentProgressLog(
     "Waiting for setAgentURI transaction hash",
     setAgentURI(agentId, agentCardUri),
+    options?.logger,
   );
-  logCreateAgentDetail(`ERC-8004 setAgentURI tx: ${agentUriTx}`);
+  logCreateAgentDetail(`ERC-8004 setAgentURI tx: ${agentUriTx}`, options?.logger);
 
   // ── Step 5: Bind ENS via ENSIP-25 + contenthash ──────────────────────────
-  console.log("[5/5] Binding ENS via ENSIP-25 + contenthash");
-  logCreateAgentDetail(`ENS name: ${ensName}`);
-  logCreateAgentDetail(`Policy URI for ENS: ${policyUri}`);
+  emitCreateAgentLog("[5/5] Binding ENS via ENSIP-25 + contenthash", options?.logger);
+  logCreateAgentDetail(`ENS name: ${ensName}`, options?.logger);
+  logCreateAgentDetail(`Policy URI for ENS: ${policyUri}`, options?.logger);
   const { txHash: ensTx } = await setAllENSRecords(
     ensName,
     agentId,
     policyUri,
+    undefined,
+    undefined,
+    options?.logger,
   );
-  logCreateAgentDetail(`ENS records set tx: ${ensTx}`);
+  logCreateAgentDetail(`ENS records set tx: ${ensTx}`, options?.logger);
 
   // ── Bonus: Link BitGo wallet to ERC-8004 agent ────────────────────────────
   // On BitGo TSS wallets, signTypedData may recover to baseAddress rather than
   // a forwarder address. We try a deterministic candidate list to keep setup
   // warning-free while preserving forwarder usage in the policy.
   let linkedRegistryWalletAddress: `0x${string}` | undefined;
-  logCreateAgentDetail("Linking BitGo wallet to ERC-8004 agent via EIP-712...");
+  logCreateAgentDetail("Linking BitGo wallet to ERC-8004 agent via EIP-712...", options?.logger);
   try {
     const { getWallet } = await import("./bitgo.js");
     const bitgoWallet = await getWallet(bitgoResult.walletId);
@@ -363,16 +389,18 @@ export async function createAgent(
     }
 
     if (linkedRegistryWalletAddress.toLowerCase() === forwarder) {
-      logCreateAgentDetail(`Agent wallet set to ${linkedRegistryWalletAddress}`);
+      logCreateAgentDetail(`Agent wallet set to ${linkedRegistryWalletAddress}`, options?.logger);
     } else {
       logCreateAgentDetail(
         `Agent wallet set to BitGo signer ${linkedRegistryWalletAddress} (forwarder remains ${bitgoResult.forwarderAddress})`,
+        options?.logger,
       );
     }
   } catch (err) {
     // Non-fatal: setup remains fully usable (ENS, policy, canAgentSpend, x402).
     logCreateAgentDetail(
       `Skipped optional setAgentWallet link: ${(err as Error).message}`,
+      options?.logger,
     );
   }
 
@@ -399,7 +427,7 @@ export async function createAgent(
   };
 
   await fs.mkdir("agents", { recursive: true });
-  logCreateAgentDetail("Persisting agent record to agents/...");
+  logCreateAgentDetail("Persisting agent record to agents/...", options?.logger);
 
   // Main record (safe to commit — no secrets)
   await fs.writeFile(
@@ -419,12 +447,12 @@ export async function createAgent(
   }
 
   console.log("");
-  logCreateAgent(`Agent "${config.name}" created successfully`);
-  logCreateAgentDetail(`ENS: ${ensName}`);
-  logCreateAgentDetail(`AgentId: ${agentId}`);
-  logCreateAgentDetail(`Policy: ${policyUri}`);
-  logCreateAgentDetail(`Gateway: ${policyGatewayUrl}`);
-  logCreateAgentDetail(`Wallet: ${bitgoResult.forwarderAddress}`);
+  logCreateAgent(`Agent "${config.name}" created successfully`, options?.logger);
+  logCreateAgentDetail(`ENS: ${ensName}`, options?.logger);
+  logCreateAgentDetail(`AgentId: ${agentId}`, options?.logger);
+  logCreateAgentDetail(`Policy: ${policyUri}`, options?.logger);
+  logCreateAgentDetail(`Gateway: ${policyGatewayUrl}`, options?.logger);
+  logCreateAgentDetail(`Wallet: ${bitgoResult.forwarderAddress}`, options?.logger);
   console.log("");
 
   return record;

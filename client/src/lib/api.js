@@ -65,6 +65,9 @@ export const vcr = {
 
   // Register
   getRegistrationReadiness: () => api("/api/register/readiness"),
+  startRegistrationJob: (body) => api("/api/register/jobs", { method: "POST", body }),
+  getRegistrationJob: (jobId) =>
+    api(`/api/register/jobs/${encodeURIComponent(jobId)}`),
   registerAgent: (body) => api("/api/register", { method: "POST", body }),
   getAgent: (agentId) => api(`/api/register/${encodeURIComponent(agentId)}`),
   getAgentsByOwner: (address) =>
