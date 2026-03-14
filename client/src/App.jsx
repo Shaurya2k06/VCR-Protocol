@@ -6,6 +6,8 @@ import AgentRegistration from "./components/pages/AgentRegistration";
 import SpendVerifier from "./components/pages/SpendVerifier";
 import PaywallDemo from "./components/pages/PaywallDemo";
 import PolicyExplorer from "./components/pages/PolicyExplorer";
+import CreateDocPage from "./pages/CreateDocPage";
+import ViewDocPage from "./pages/ViewDocPage";
 
 export default function App() {
   return (
@@ -18,6 +20,8 @@ export default function App() {
         <Route path="/verify" element={<SpendVerifier />} />
         <Route path="/demo" element={<PaywallDemo />} />
         <Route path="/explorer" element={<PolicyExplorer />} />
+        <Route path="/doc/create" element={<CreateDocPage />} />
+        <Route path="/doc/:cid" element={<ViewDocPage />} />
       </Routes>
     </BrowserRouter>
   );

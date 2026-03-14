@@ -9,6 +9,8 @@ import verifyRouter from "./routes/verify.js";
 import registerRouter from "./routes/register.js";
 import demoRouter from "./routes/demo.js";
 import walletRouter from "./routes/wallet.js";
+import ipfsRouter from "./routes/ipfs.js";
+import documentsRouter from "./routes/documents.js";
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? "3001");
@@ -16,7 +18,7 @@ const PORT = parseInt(process.env.PORT ?? "3001");
 // ─── Middleware ───────────────────────────────────────────────────────────────
 
 app.use(cors());
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "5mb" }));
 
 // Request logger (dev)
 if (process.env.NODE_ENV !== "production") {
@@ -45,6 +47,8 @@ app.use("/api/verify", verifyRouter);
 app.use("/api/register", registerRouter);
 app.use("/api/demo", demoRouter);
 app.use("/api/wallet", walletRouter);
+app.use("/api/ipfs", ipfsRouter);
+app.use("/api/documents", documentsRouter);
 
 // ─── Global Error Handler ─────────────────────────────────────────────────────
 
@@ -73,6 +77,8 @@ async function start() {
     console.log(`   Register: http://localhost:${PORT}/api/register`);
     console.log(`   Demo: http://localhost:${PORT}/api/demo`);
     console.log(`   Wallet: http://localhost:${PORT}/api/wallet\n`);
+    console.log(`   IPFS: http://localhost:${PORT}/api/ipfs`);
+    console.log(`   Documents: http://localhost:${PORT}/api/documents\n`);
   });
 }
 
