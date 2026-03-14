@@ -273,7 +273,7 @@ export default function AgentRegistration() {
   const [chainOptions, setChainOptions] = useState(DEFAULT_CHAIN_OPTIONS);
   const [domainModes, setDomainModes] = useState(DEFAULT_DOMAIN_MODE_OPTIONS);
   const [sdkReferences, setSdkReferences] = useState([]);
-  const [ensAppUrl, setEnsAppUrl] = useState("https://app.ens.domains");
+  const [ensAppUrl, setEnsAppUrl] = useState("https://sepolia.app.ens.domains/");
   const [signingAddress, setSigningAddress] = useState("");
   const [supportsSelfOwnedDomainAutomation, setSupportsSelfOwnedDomainAutomation] = useState(null);
   const [readiness, setReadiness] = useState({
@@ -366,7 +366,8 @@ export default function AgentRegistration() {
         setChainOptions(response.chainOptions?.length ? response.chainOptions : DEFAULT_CHAIN_OPTIONS);
         setDomainModes(response.domainModes?.length ? response.domainModes : DEFAULT_DOMAIN_MODE_OPTIONS);
         setSdkReferences(response.sdkReferences ?? []);
-        setEnsAppUrl(response.ensAppUrl ?? "https://app.ens.domains");
+        console.log("Readiness response:", response);
+        setEnsAppUrl(response.ensAppUrl ?? "https://sepolia.app.ens.domains/");
         setSigningAddress(response.signingAddress ?? "");
         setSupportsSelfOwnedDomainAutomation(
           response.supportsSelfOwnedDomainAutomation !== false,
