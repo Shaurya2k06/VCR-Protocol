@@ -48,9 +48,7 @@ export async function updateAgentPolicy(
     process.env.PRIVATE_KEY
   ) {
     const signer = privateKeyToAccount(process.env.PRIVATE_KEY as `0x${string}`).address;
-    const strictManagerCheck = (process.env.VCR_STRICT_ENS_MANAGER_CHECK ?? "false")
-      .toLowerCase() === "true";
-    if (record.ensManagerAddress.toLowerCase() !== signer.toLowerCase() && strictManagerCheck) {
+    if (record.ensManagerAddress.toLowerCase() !== signer.toLowerCase()) {
       throw new Error(
         `ENS updates for "${record.ensName}" are controlled by ${record.ensManagerAddress}. ` +
         `Run with that manager wallet as PRIVATE_KEY or delegate Public Resolver approval first.`,

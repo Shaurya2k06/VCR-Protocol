@@ -60,80 +60,8 @@ function toUrlSafeBase64(value: string): string {
   return value.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
-function createPolicyMarkdownDocument(policy: VCRPolicy): string {
-  const canonicalJson = stringify(policy, { space: "  " });
-  const timeRestriction = policy.constraints.timeRestrictions
-    ? `${policy.constraints.timeRestrictions.allowedHours[0]}:00–${policy.constraints.timeRestrictions.allowedHours[1]}:00 ${policy.constraints.timeRestrictions.timezone}`
-    : "None";
-
-  const recipients = policy.constraints.allowedRecipients
-    .map((recipient) => `- ${recipient}`)
-    .join("\n");
-
-  const tokens = policy.constraints.allowedTokens
-    .map((token) => `- ${token}`)
-    .join("\n");
-
-  const chains = policy.constraints.allowedChains
-    .map((chain) => `- ${chain}`)
-    .join("\n");
-
-  const expiresAtLine = policy.metadata.expiresAt
-    ? `- Expires At: ${policy.metadata.expiresAt}`
-    : null;
-
-  return [
-    "# VCR Rules and Regulations",
-    "",
-    "## Agent",
-    `- ENS Name: ${policy.ensName ?? "N/A"}`,
-    `- Agent ID: ${policy.agentId}`,
-    `- Wallet Address: ${policy.walletAddress ?? "N/A"}`,
-    `- Custodian: ${policy.custodian ?? "N/A"}`,
-    `- Network: ${policy.network ?? "N/A"}`,
-    "",
-    "## Constraints",
-    `- Max Transaction: ${policy.constraints.maxTransaction.amount} ${policy.constraints.maxTransaction.token} on ${policy.constraints.maxTransaction.chain} (base units)`,
-    `- Daily Limit: ${policy.constraints.dailyLimit.amount} ${policy.constraints.dailyLimit.token} on ${policy.constraints.dailyLimit.chain} (base units)`,
-    `- Allowed Hours: ${timeRestriction}`,
-    "",
-    "## Allowed Recipients",
-    recipients,
-    "",
-    "## Allowed Tokens",
-    tokens,
-    "",
-    "## Allowed Chains",
-    chains,
-    "",
-    "## Metadata",
-    `- Created At: ${policy.metadata.createdAt}`,
-    `- Created By: ${policy.metadata.createdBy}`,
-    `- Description: ${policy.metadata.description ?? "N/A"}`,
-    ...(expiresAtLine ? [expiresAtLine] : []),
-    "",
-    "## Canonical Policy JSON",
-    "```json",
-    canonicalJson,
-    "```",
-    "",
-  ].join("\n");
-}
-
 function createPolicyDocument(policy: VCRPolicy): string {
-  return createPolicyMarkdownDocument(policy);
-}
-
-function getViewerCredNamespaceCandidates(namespace: string): string[] {
-  const normalized = normalizePolicyNamespace(namespace);
-  return Array.from(new Set([
-    namespace,
-    normalized,
-    `${namespace}-sepolia`,
-    `${normalized}-sepolia`,
-    `${namespace}-gnosis`,
-    `${normalized}-gnosis`,
-  ]));
+  return stringify(policy, { space: "  " });
 }
 
 async function buildFileverseViewerUrl(
@@ -141,23 +69,20 @@ async function buildFileverseViewerUrl(
   portalAddress: string,
   fileId: string,
 ): Promise<string | undefined> {
-  for (const candidateNamespace of getViewerCredNamespaceCandidates(namespace)) {
-    const credsPath = path.resolve("creds", `${candidateNamespace}.json`);
-    try {
-      const raw = await fs.readFile(credsPath, "utf8");
-      const creds = JSON.parse(raw) as {
-        portalKeys?: { viewSecret?: string };
-      };
-      const viewSecret = creds.portalKeys?.viewSecret;
-      if (!viewSecret) continue;
+  const credsPath = path.resolve("creds", `${namespace}.json`);
 
-      return `https://docs.fileverse.io/${portalAddress}/${fileId}#key=${toUrlSafeBase64(viewSecret)}`;
-    } catch {
-      continue;
-    }
+  try {
+    const raw = await fs.readFile(credsPath, "utf8");
+    const creds = JSON.parse(raw) as {
+      portalKeys?: { viewSecret?: string };
+    };
+    const viewSecret = creds.portalKeys?.viewSecret;
+    if (!viewSecret) return undefined;
+
+    return `https://docs.fileverse.io/${portalAddress}/${fileId}#key=${toUrlSafeBase64(viewSecret)}`;
+  } catch {
+    return undefined;
   }
-
-  return undefined;
 }
 
 export async function storePolicyDocument(

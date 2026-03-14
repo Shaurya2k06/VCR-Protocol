@@ -5,7 +5,6 @@ import {
   validatePolicy,
   serializePolicy,
   computePolicyHash,
-  parsePolicyDocument,
 } from "../src/policy.js";
 import { canAgentSpendWithPolicy } from "../src/verifier.js";
 import {
@@ -191,32 +190,6 @@ describe("serializePolicy", () => {
     // Force same timestamp for comparison
     (p2 as any).metadata.createdAt = p1.metadata.createdAt;
     expect(serializePolicy(p1)).toBe(serializePolicy(p2));
-  });
-});
-
-describe("parsePolicyDocument", () => {
-  it("parses canonical JSON policy content", () => {
-    const policy = makePolicy();
-    const payload = serializePolicy(policy);
-    expect(parsePolicyDocument(payload)).toEqual(policy);
-  });
-
-  it("parses markdown with embedded canonical JSON block", () => {
-    const policy = makePolicy();
-    const payload = [
-      "# VCR Rules and Regulations",
-      "",
-      "## Canonical Policy JSON",
-      "```json",
-      serializePolicy(policy),
-      "```",
-    ].join("\n");
-
-    expect(parsePolicyDocument(payload)).toEqual(policy);
-  });
-
-  it("throws when markdown has no JSON block", () => {
-    expect(() => parsePolicyDocument("# Rules\n\nNo machine-readable block")).toThrow(/json/i);
   });
 });
 

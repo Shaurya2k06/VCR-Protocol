@@ -77,36 +77,6 @@ export function extractPolicyCid(cidOrUri: string): string {
   return cidOrUri;
 }
 
-function parseAndValidateJsonPolicy(rawJson: string): VCRPolicy {
-  const policy = JSON.parse(rawJson) as VCRPolicy;
-  validatePolicy(policy);
-  return policy;
-}
-
-export function parsePolicyDocument(policyDocument: string): VCRPolicy {
-  const body = policyDocument.trim();
-  let lastError: Error | null = null;
-
-  try {
-    return parseAndValidateJsonPolicy(body);
-  } catch (err) {
-    lastError = err instanceof Error ? err : new Error(String(err));
-  }
-
-  const markdownJsonBlock = body.match(/```json\s*([\s\S]*?)\s*```/i)?.[1];
-  if (markdownJsonBlock) {
-    try {
-      return parseAndValidateJsonPolicy(markdownJsonBlock);
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-    }
-  }
-
-  throw new Error(
-    `Policy document is not valid JSON or markdown with a fenced JSON block. ${lastError?.message ?? "unknown parse error"}`,
-  );
-}
-
 /**
  * Pin a VCR Policy JSON to IPFS via Pinata.
  * Uses json-stringify-deterministic to ensure CID reproducibility.
@@ -142,8 +112,9 @@ export async function fetchPolicy(cidOrUri: string): Promise<VCRPolicy> {
     throw new Error(`Failed to fetch policy from IPFS: ${response.status} ${response.statusText}`);
   }
 
-  const payload = await response.text();
-  return parsePolicyDocument(payload);
+  const policy = (await response.json()) as VCRPolicy;
+  validatePolicy(policy);
+  return policy;
 }
 
 /**
