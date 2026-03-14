@@ -4,6 +4,10 @@
     content: ["./index.html", "./src/**/*.{html,js,jsx}"],
   theme: {
   	extend: {
+  		fontFamily: {
+  			geist: ['Geist', 'sans-serif'],
+  			instrument: ['"Instrument Serif"', 'serif'],
+  		},
   		borderRadius: {
   			lg: 'var(--radius)',
   			md: 'calc(var(--radius) - 2px)',

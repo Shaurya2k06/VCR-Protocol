@@ -1,629 +1,350 @@
-import { Link } from "react-router-dom";
-import { useEffect, useRef, useState } from "react";
-import { vcr } from "../../lib/api";
+import React from 'react';
+import { Link } from 'react-router-dom';
+import ArchitectureFlow from '../ArchitectureFlow';
+import FeatureShowcase from '../FeatureShowcase';
 
-const FEATURES = [
-  {
-    icon: "🕵️",
-    title: "ERC-8004 Identity",
-    desc: "Autonomous agents get on-chain identity via the IdentityRegistry, enabling trustless agent discovery.",
-    badge: "Identity Layer",
-    badgeClass: "badge-purple",
-  },
-  {
-    icon: "📜",
-    title: "VCR Policy",
-    desc: "JSON spending policies pinned to IPFS and anchored via ENS — verifiable by anyone, owned by no one.",
-    badge: "Policy Layer",
-    badgeClass: "badge-blue",
-  },
-  {
-    icon: "🔗",
-    title: "ENSIP-25 Linking",
-    desc: "Bidirectional agent-ENS links via ERC-7930-encoded text record keys. One-line testnet swap.",
-    badge: "ENS Layer",
-    badgeClass: "badge-amber",
-  },
-  {
-    icon: "💸",
-    title: "x402 Payments",
-    desc: "HTTP 402 payment rails secured by EIP-3009 USDC signatures. The missing internet money protocol.",
-    badge: "Payment Layer",
-    badgeClass: "badge-green",
-  },
-  {
-    icon: "🏦",
-    title: "BitGo Enforcement",
-    desc: "On-chain wallet policies (velocity limits, address whitelists) mirror the VCR policy as hard enforcement.",
-    badge: "Enforcement Layer",
-    badgeClass: "badge-red",
-  },
-  {
-    icon: "✅",
-    title: "canAgentSpend()",
-    desc: "Nine constraint checks in one call — amount, recipient, token, chain, time, daily limit. Any service can verify.",
-    badge: "Verifier",
-    badgeClass: "badge-green",
-  },
-];
+/* ================================================================== */
+/*  VCR Protocol — Landing Page                                       */
+/*  Neo-Brutalist Reversion with Interactive Components               */
+/* ================================================================== */
 
-const FLOW_STEPS = [
-  { label: "Agent Owner", icon: "👤", color: "var(--neon-purple)" },
-  { label: "VCR Policy JSON", icon: "📄", color: "var(--neon-blue)" },
-  { label: "IPFS (Pinata)", icon: "🗂️", color: "var(--neon-amber)" },
-  { label: "ENS vcr.policy", icon: "🔗", color: "var(--neon-blue)" },
-  { label: "ERC-8004 Registry", icon: "📋", color: "var(--neon-purple)" },
-  { label: "x402 Paywall", icon: "🚧", color: "var(--neon-red)" },
-  { label: "canAgentSpend()", icon: "✅", color: "var(--neon-green)" },
-  { label: "Payment Settled", icon: "💰", color: "var(--text-muted)" },
-];
+function Section({ id, children, bg = 'transparent', borderTop = false }) {
+  return (
+    <section
+      id={id}
+      style={{
+        padding: '120px 0',
+        background: bg,
+        borderTop: borderTop ? 'var(--nb-border)' : 'none',
+        color: bg === 'var(--nb-ink)' ? 'var(--nb-bg)' : 'var(--nb-ink)'
+      }}
+    >
+      <div className="container" style={{ display: 'flex', flexDirection: 'column', gap: '64px' }}>
+        {children}
+      </div>
+    </section>
+  );
+}
+
+function SectionLabel({ children, dark = false }) {
+  const color = dark ? 'var(--nb-bg)' : 'var(--nb-accent)';
+  const border = dark ? 'var(--nb-bg)' : 'var(--nb-ink)';
+  
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+      <div style={{ 
+        width: '20px', height: '20px', 
+        background: color, 
+        border: `3px solid ${border}`,
+        boxShadow: `3px 3px 0 ${dark ? 'rgba(255,255,255,0.2)' : 'var(--nb-accent)'}`
+      }} />
+      <span className="mono" style={{ fontSize: '1rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: color }}>
+        [{children}]
+      </span>
+    </div>
+  );
+}
+
+function SectionTitle({ title, subtitle }) {
+  return (
+    <div style={{ maxWidth: '700px' }}>
+      <h2 style={{ fontSize: '3rem', marginBottom: '24px', textTransform: 'uppercase', letterSpacing: '-0.04em' }}>
+        {title}
+      </h2>
+      {subtitle && (
+        <p style={{ fontSize: '1.25rem', opacity: 0.9, fontFamily: 'var(--font-mono)' }}>
+          {subtitle}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function TechBadge({ children, color = 'var(--nb-ink)' }) {
+  return (
+    <span 
+      className="nb-badge" 
+      style={{ 
+        color: color,
+        borderColor: color,
+        boxShadow: `3px 3px 0 ${color}`
+      }}
+    >
+      {children}
+    </span>
+  );
+}
 
 export default function Landing() {
-  const canvasRef = useRef(null);
-  const [backendStatus, setBackendStatus] = useState({
-    loading: true,
-    ok: false,
-    data: null,
-    error: "",
-  });
-
-  // Animated particle grid background
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    let animId;
-    let t = 0;
-
-    const resize = () => {
-      canvas.width = canvas.offsetWidth * window.devicePixelRatio;
-      canvas.height = canvas.offsetHeight * window.devicePixelRatio;
-      ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
-    };
-    resize();
-    window.addEventListener("resize", resize);
-
-    const draw = () => {
-      const w = canvas.offsetWidth;
-      const h = canvas.offsetHeight;
-      ctx.clearRect(0, 0, w, h);
-
-      const cols = 16;
-      const rows = 8;
-      const dx = w / cols;
-      const dy = h / rows;
-
-      for (let i = 0; i <= cols; i++) {
-        for (let j = 0; j <= rows; j++) {
-          const px = i * dx;
-          const py = j * dy;
-          const wave = Math.sin(t * 0.02 + i * 0.4 + j * 0.4) * 0.5 + 0.5;
-          const alpha = wave * 0.18 + 0.04;
-          ctx.beginPath();
-          ctx.arc(px, py, 1.2, 0, Math.PI * 2);
-          ctx.fillStyle = `rgba(99, 210, 255, ${alpha})`;
-          ctx.fill();
-        }
-      }
-
-      t++;
-      animId = requestAnimationFrame(draw);
-    };
-
-    draw();
-    return () => {
-      cancelAnimationFrame(animId);
-      window.removeEventListener("resize", resize);
-    };
-  }, []);
-
-  useEffect(() => {
-    let mounted = true;
-
-    async function loadBackendStatus() {
-      try {
-        const data = await vcr.status();
-        if (!mounted) return;
-
-        setBackendStatus({
-          loading: false,
-          ok: true,
-          data,
-          error: "",
-        });
-      } catch (error) {
-        if (!mounted) return;
-
-        setBackendStatus({
-          loading: false,
-          ok: false,
-          data: null,
-          error: error.message || "Unable to reach backend",
-        });
-      }
-    }
-
-    loadBackendStatus();
-
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
   return (
-    <div>
-      {/* ── Hero ─────────────────────────────────────────────────────────── */}
-      <section
-        style={{
-          position: "relative",
-          minHeight: "100vh",
-          display: "flex",
-          alignItems: "center",
-          overflow: "hidden",
-        }}
-      >
-        <canvas
-          ref={canvasRef}
-          style={{
-            position: "absolute",
-            inset: 0,
-            width: "100%",
-            height: "100%",
-            pointerEvents: "none",
-          }}
-        />
+    <div style={{ background: 'var(--nb-bg)', color: 'var(--nb-ink)', minHeight: '100vh', position: 'relative' }}>
+      
+      {/* Absolute grid overlay */}
+      <div style={{
+        position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+        backgroundImage: 'linear-gradient(var(--nb-ink) 1px, transparent 1px), linear-gradient(90deg, var(--nb-ink) 1px, transparent 1px)',
+        backgroundSize: '40px 40px',
+        opacity: 0.03,
+        pointerEvents: 'none',
+        zIndex: 0
+      }} />
 
-        {/* Radial glow */}
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            pointerEvents: "none",
-            background:
-              "radial-gradient(ellipse 70% 60% at 50% 40%, rgba(99,210,255,0.07) 0%, transparent 70%)",
-          }}
-        />
-
-        <div
-          className="container"
-          style={{
-            position: "relative",
-            zIndex: 1,
-            textAlign: "center",
-            padding: "120px 24px 80px",
-          }}
-        >
-          <div className="flex items-center justify-center gap-2 mb-6">
-            <span className="badge badge-blue">v1.0 · Sepolia Testnet</span>
-            <span className="badge badge-purple">
-              ENSIP-25 · ERC-8004 · x402
+      {/* --- NAVBAR --- */}
+      <header style={{
+        position: 'fixed', top: 0, left: 0, right: 0,
+        height: '80px',
+        background: 'var(--nb-bg)',
+        borderBottom: 'var(--nb-border)',
+        zIndex: 100,
+        display: 'flex', alignItems: 'center'
+      }}>
+        <div className="container" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            <div style={{ 
+              width: '40px', height: '40px', 
+              background: 'var(--nb-accent)', color: 'var(--nb-bg)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontWeight: 900, fontFamily: 'var(--font-display)', fontSize: '1.5rem',
+              border: '3px solid var(--nb-ink)',
+              boxShadow: '3px 3px 0 var(--nb-ink)'
+            }}>
+              V
+            </div>
+            <span style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: '1.4rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              VCR Protocol
             </span>
           </div>
-
-          <h1
-            style={{
-              fontSize: "clamp(2.8rem, 7vw, 5.5rem)",
-              lineHeight: 1.05,
-              marginBottom: "24px",
-              letterSpacing: "-0.04em",
-            }}
-          >
-            Policy-Bound
-            <br />
-            <span className="text-gradient">Agent Wallets</span>
-          </h1>
-
-          <p
-            style={{
-              fontSize: "clamp(1rem, 2.5vw, 1.25rem)",
-              color: "var(--text-secondary)",
-              maxWidth: 620,
-              margin: "0 auto 40px",
-              lineHeight: 1.7,
-            }}
-          >
-            The missing layer between ERC-8004 identity, ENS names, and x402
-            payment rails. VCR lets you define, publish, and verify spending
-            constraints for autonomous agents.
-          </p>
-
-          <div className="flex justify-center gap-3 flex-wrap">
-            <Link to="/build" className="btn btn-primary btn-lg">
-              Build a Policy →
+          
+          <nav style={{ display: 'flex', gap: '32px', alignItems: 'center', fontFamily: 'var(--font-mono)' }}>
+            <a href="#how-it-works" style={{ color: 'inherit', textDecoration: 'none', fontWeight: 600, fontSize: '0.9rem', textTransform: 'uppercase' }}>Architecture</a>
+            <a href="#features" style={{ color: 'inherit', textDecoration: 'none', fontWeight: 600, fontSize: '0.9rem', textTransform: 'uppercase' }}>Features</a>
+            <a href="#security" style={{ color: 'inherit', textDecoration: 'none', fontWeight: 600, fontSize: '0.9rem', textTransform: 'uppercase' }}>Security</a>
+            <Link to="/register" className="nb-btn nb-btn--primary" style={{ padding: '10px 20px', fontSize: '0.85rem' }}>
+              Initialization
             </Link>
-            <Link to="/demo" className="btn btn-outline btn-lg">
-              x402 Live Demo
-            </Link>
-          </div>
+          </nav>
+        </div>
+      </header>
 
-          {/* Arch preview */}
-          <div
-            className="card"
-            style={{
-              marginTop: 64,
-              textAlign: "left",
-              maxWidth: 720,
-              marginLeft: "auto",
-              marginRight: "auto",
-            }}
-          >
-            <p
-              className="text-muted mono"
-              style={{ fontSize: "0.78rem", marginBottom: 12 }}
-            >
-              // Architecture flow
-            </p>
-            <div
-              style={{
-                fontFamily: "var(--font-mono)",
-                fontSize: "0.8rem",
-                lineHeight: 2,
-                color: "var(--text-secondary)",
-              }}
-            >
-              <div>
-                <span className="text-purple">Agent Owner</span> → defines{" "}
-                <span className="text-neon">VCR Policy JSON</span> → pins to{" "}
-                <span className="text-amber">IPFS</span> → gets CID
-              </div>
-              <div>
-                <span className="text-purple">Agent Owner</span> → sets ENS text
-                record <span className="text-neon">vcr.policy</span> =
-                ipfs://&lt;CID&gt;
-              </div>
-              <div>
-                <span className="text-purple">Agent Owner</span> → registers
-                agent on{" "}
-                <span className="text-neon">ERC-8004 IdentityRegistry</span>
-              </div>
-              <div style={{ height: 8 }} />
-              <div>
-                <span className="text-amber">Service</span> ← receives{" "}
-                <span className="text-red">x402</span> payment request from
-                agent
-              </div>
-              <div>
-                <span className="text-amber">Service</span> → reads ENS →
-                fetches vcr.policy → runs
-              </div>
-              <div style={{ paddingLeft: 24 }}>
-                <span className="text-green">canAgentSpend()</span>
-              </div>
-              <div
-                style={{
-                  paddingLeft: 48,
-                  color: "var(--neon-green)",
-                  fontSize: "0.75rem",
-                }}
-              >
-                ✓ amount ≤ maxTransaction &nbsp; ✓ recipient whitelisted
-                <br />
-                ✓ cumulative ≤ dailyLimit &nbsp;&nbsp; ✓ token + chain allowed
-                <br />✓ within allowedHours
-              </div>
-              <div style={{ marginTop: 8 }}>
-                If ALL pass → allow{" "}
-                <span className="text-green">x402 payment</span> to proceed
-              </div>
+      {/* --- HERO --- */}
+      <section style={{
+        padding: '200px 0 100px',
+        position: 'relative',
+        zIndex: 1
+      }}>
+        <div className="container" style={{ position: 'relative' }}>
+          <div style={{ maxWidth: '900px' }}>
+            <div style={{ display: 'flex', gap: '16px', marginBottom: '32px', flexWrap: 'wrap' }}>
+              <TechBadge color="var(--nb-ok)">SYS.ERC-8004</TechBadge>
+              <TechBadge color="var(--nb-accent)">SYS.ENSIP-25</TechBadge>
+              <TechBadge color="var(--nb-accent2)">SYS.x402</TechBadge>
             </div>
-          </div>
-
-          <div
-            className="card"
-            style={{
-              marginTop: 24,
-              textAlign: "left",
-              maxWidth: 720,
-              marginLeft: "auto",
-              marginRight: "auto",
-              background:
-                "linear-gradient(135deg, rgba(74,222,128,0.05), rgba(99,210,255,0.05))",
-              borderColor: backendStatus.ok
-                ? "rgba(74,222,128,0.24)"
-                : "rgba(248,113,113,0.24)",
-            }}
-          >
-            <div
-              className="flex items-center justify-between"
-              style={{ gap: 16, marginBottom: 16, flexWrap: "wrap" }}
-            >
-              <div>
-                <p
-                  className="text-muted mono"
-                  style={{ fontSize: "0.78rem", marginBottom: 8 }}
-                >
-                  // Live backend status
-                </p>
-                <h3 style={{ fontSize: "1.1rem", marginBottom: 6 }}>
-                  Backend Connectivity
-                </h3>
-                <p
-                  style={{
-                    fontSize: "0.85rem",
-                    color: "var(--text-secondary)",
-                  }}
-                >
-                  This panel checks the real API health endpoint so you can
-                  confirm the platform is actually running.
-                </p>
-              </div>
-
-              <span
-                className={`badge ${backendStatus.loading ? "badge-gray" : backendStatus.ok ? "badge-green" : "badge-red"}`}
-              >
-                {backendStatus.loading
-                  ? "Checking..."
-                  : backendStatus.ok
-                    ? "Backend Online"
-                    : "Backend Offline"}
+            
+            <h1 style={{ 
+              fontSize: 'clamp(3.5rem, 8vw, 6.5rem)', 
+              lineHeight: 0.95, 
+              marginBottom: '32px',
+              textTransform: 'uppercase',
+              color: 'var(--nb-ink)',
+              fontFamily: 'var(--font-display)',
+              letterSpacing: '-0.04em'
+            }}>
+              Policy-Bound <br/>
+              <span style={{ 
+                color: 'var(--nb-bg)',
+                background: 'var(--nb-accent)', 
+                padding: '0 16px', 
+                display: 'inline-block',
+                transform: 'rotate(-2deg)',
+                border: '4px solid var(--nb-ink)',
+                boxShadow: '8px 8px 0 var(--nb-ink)',
+                marginTop: '16px'
+              }}>
+                Agent Wallets.
               </span>
-            </div>
-
-            {backendStatus.loading && (
-              <div style={{ color: "var(--text-muted)", fontSize: "0.84rem" }}>
-                Loading backend health status...
-              </div>
-            )}
-
-            {!backendStatus.loading &&
-              backendStatus.ok &&
-              backendStatus.data && (
-                <div style={{ display: "grid", gap: 10 }}>
-                  <div
-                    className="flex items-center justify-between"
-                    style={{
-                      gap: 12,
-                      borderBottom: "1px solid var(--border)",
-                      paddingBottom: 10,
-                    }}
-                  >
-                    <span
-                      style={{
-                        color: "var(--text-muted)",
-                        fontSize: "0.82rem",
-                      }}
-                    >
-                      Service
-                    </span>
-                    <span className="mono" style={{ fontSize: "0.82rem" }}>
-                      {backendStatus.data.service}
-                    </span>
-                  </div>
-                  <div
-                    className="flex items-center justify-between"
-                    style={{
-                      gap: 12,
-                      borderBottom: "1px solid var(--border)",
-                      paddingBottom: 10,
-                    }}
-                  >
-                    <span
-                      style={{
-                        color: "var(--text-muted)",
-                        fontSize: "0.82rem",
-                      }}
-                    >
-                      Status
-                    </span>
-                    <span
-                      className="mono"
-                      style={{
-                        fontSize: "0.82rem",
-                        color: "var(--neon-green)",
-                      }}
-                    >
-                      {backendStatus.data.status}
-                    </span>
-                  </div>
-                  <div
-                    className="flex items-center justify-between"
-                    style={{
-                      gap: 12,
-                      borderBottom: "1px solid var(--border)",
-                      paddingBottom: 10,
-                    }}
-                  >
-                    <span
-                      style={{
-                        color: "var(--text-muted)",
-                        fontSize: "0.82rem",
-                      }}
-                    >
-                      Database
-                    </span>
-                    <span
-                      className="mono"
-                      style={{
-                        fontSize: "0.82rem",
-                        color:
-                          backendStatus.data.db === "connected"
-                            ? "var(--neon-green)"
-                            : "var(--neon-red)",
-                      }}
-                    >
-                      {backendStatus.data.db}
-                    </span>
-                  </div>
-                  <div
-                    className="flex items-center justify-between"
-                    style={{
-                      gap: 12,
-                      borderBottom: "1px solid var(--border)",
-                      paddingBottom: 10,
-                    }}
-                  >
-                    <span
-                      style={{
-                        color: "var(--text-muted)",
-                        fontSize: "0.82rem",
-                      }}
-                    >
-                      Version
-                    </span>
-                    <span className="mono" style={{ fontSize: "0.82rem" }}>
-                      {backendStatus.data.version}
-                    </span>
-                  </div>
-                  <div
-                    className="flex items-center justify-between"
-                    style={{ gap: 12 }}
-                  >
-                    <span
-                      style={{
-                        color: "var(--text-muted)",
-                        fontSize: "0.82rem",
-                      }}
-                    >
-                      Timestamp
-                    </span>
-                    <span className="mono" style={{ fontSize: "0.82rem" }}>
-                      {backendStatus.data.timestamp}
-                    </span>
-                  </div>
-                </div>
-              )}
-
-            {!backendStatus.loading && !backendStatus.ok && (
-              <div className="alert alert-error" style={{ marginTop: 4 }}>
-                {backendStatus.error ||
-                  "Backend is not reachable. Check that the server is running and VITE_API_URL points to the correct API."}
-              </div>
-            )}
-          </div>
-        </div>
-      </section>
-
-      {/* ── Features ──────────────────────────────────────────────────────── */}
-      <section
-        style={{
-          padding: "100px 0",
-          background:
-            "linear-gradient(180deg, var(--bg-base), var(--bg-surface))",
-        }}
-      >
-        <div className="container">
-          <div className="page-header">
-            <h2>Everything Between Identity & Payment</h2>
-            <p>Six protocol layers wired together into one coherent SDK</p>
-          </div>
-
-          <div className="grid-3">
-            {FEATURES.map((f) => (
-              <div key={f.title} className="card" style={{ cursor: "default" }}>
-                <div style={{ fontSize: "2rem", marginBottom: 12 }}>
-                  {f.icon}
-                </div>
-                <div className="flex items-center gap-2 mb-3">
-                  <h3 style={{ fontSize: "1rem" }}>{f.title}</h3>
-                  <span className={`badge ${f.badgeClass}`}>{f.badge}</span>
-                </div>
-                <p
-                  style={{
-                    fontSize: "0.875rem",
-                    color: "var(--text-secondary)",
-                    lineHeight: 1.65,
-                  }}
-                >
-                  {f.desc}
-                </p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* ── Flow Diagram ──────────────────────────────────────────────────── */}
-      <section style={{ padding: "100px 0" }}>
-        <div className="container">
-          <div className="page-header">
-            <h2>How It Works</h2>
-            <p>From policy creation to payment verification — 8 steps</p>
-          </div>
-
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 12,
-              justifyContent: "center",
-              alignItems: "center",
-            }}
-          >
-            {FLOW_STEPS.map((step, i) => (
-              <>
-                <div
-                  key={step.label}
-                  className="card"
-                  style={{
-                    textAlign: "center",
-                    padding: "16px 20px",
-                    minWidth: 130,
-                    borderColor: `${step.color}30`,
-                  }}
-                >
-                  <div style={{ fontSize: "1.5rem", marginBottom: 6 }}>
-                    {step.icon}
-                  </div>
-                  <div
-                    style={{
-                      fontSize: "0.75rem",
-                      color: step.color,
-                      fontFamily: "var(--font-display)",
-                      fontWeight: 600,
-                    }}
-                  >
-                    {step.label}
-                  </div>
-                </div>
-                {i < FLOW_STEPS.length - 1 && (
-                  <div
-                    key={`arr-${i}`}
-                    style={{
-                      color: "var(--text-muted)",
-                      fontSize: "1.2rem",
-                      flexShrink: 0,
-                    }}
-                  >
-                    →
-                  </div>
-                )}
-              </>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* ── CTA ───────────────────────────────────────────────────────────── */}
-      <section style={{ padding: "80px 0 120px", textAlign: "center" }}>
-        <div className="container">
-          <div
-            className="card"
-            style={{
-              maxWidth: 640,
-              margin: "0 auto",
-              background:
-                "linear-gradient(135deg, rgba(99,210,255,0.05), rgba(167,139,250,0.05))",
-              borderColor: "rgba(99,210,255,0.2)",
-            }}
-          >
-            <h2 style={{ marginBottom: 12 }}>Start Building on Testnet</h2>
-            <p style={{ color: "var(--text-secondary)", marginBottom: 32 }}>
-              Fully deployable on Sepolia + Base Sepolia. No real ETH required.
+            </h1>
+            
+            <p className="mono" style={{ 
+              fontSize: '1.25rem', 
+              maxWidth: '650px', 
+              marginBottom: '48px',
+              fontWeight: 400,
+              color: 'var(--nb-ink)',
+              borderLeft: '4px solid var(--nb-accent)',
+              paddingLeft: '24px'
+            }}>
+              The Verifiable Computation Registry (VCR) enforces off-chain agent spending policies via cryptographic attestations. Making autonomous agents safe to transact.
             </p>
-            <div className="flex justify-center gap-3 flex-wrap">
-              <Link to="/register" className="btn btn-primary">
-                Register Agent
+            
+            <div style={{ display: 'flex', gap: '24px', flexWrap: 'wrap' }}>
+              <Link to="/register" className="nb-btn nb-btn--primary" style={{ fontSize: '1.2rem', padding: '18px 36px' }}>
+                Launch Demo
               </Link>
-              <Link to="/verify" className="btn btn-outline">
-                Verify Spend
-              </Link>
-              <Link to="/explorer" className="btn btn-ghost">
-                Policy Explorer
-              </Link>
+              <button className="nb-btn" style={{ fontSize: '1.2rem', padding: '18px 36px', background: '#FFFFFF' }}>
+                Read Documentation
+              </button>
             </div>
           </div>
         </div>
       </section>
+
+      {/* --- STAT STRIP --- */}
+      <div style={{ borderTop: 'var(--nb-border)', borderBottom: 'var(--nb-border)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', position: 'relative', zIndex: 1, background: '#FFFFFF' }}>
+        <div style={{ padding: '48px 32px', borderRight: 'var(--nb-border)' }}>
+          <div className="mono" style={{ fontSize: '3.5rem', fontWeight: 700, color: 'var(--nb-accent)', textShadow: '4px 4px 0 var(--nb-ink)' }}>100%</div>
+          <div style={{ fontWeight: 800, textTransform: 'uppercase', color: 'var(--nb-ink)', marginTop: '8px' }}>Deterministic Policy</div>
+        </div>
+        <div style={{ padding: '48px 32px', borderRight: 'var(--nb-border)' }}>
+          <div className="mono" style={{ fontSize: '3.5rem', fontWeight: 700, color: 'var(--nb-error)', textShadow: '4px 4px 0 var(--nb-ink)' }}>0 GAS</div>
+          <div style={{ fontWeight: 800, textTransform: 'uppercase', color: 'var(--nb-ink)', marginTop: '8px' }}>For Policy Checks</div>
+        </div>
+        <div style={{ padding: '48px 32px', borderRight: 'var(--nb-border)' }}>
+          <div className="mono" style={{ fontSize: '3.5rem', fontWeight: 700, color: 'var(--nb-ok)', textShadow: '4px 4px 0 var(--nb-ink)' }}>&gt;48H</div>
+          <div style={{ fontWeight: 800, textTransform: 'uppercase', color: 'var(--nb-ink)', marginTop: '8px' }}>Immutable IPFS Pinning</div>
+        </div>
+        <div style={{ padding: '48px 32px' }}>
+          <div className="mono" style={{ fontSize: '3.5rem', fontWeight: 700, color: 'var(--nb-accent2)', textShadow: '4px 4px 0 var(--nb-ink)' }}>1 API</div>
+          <div style={{ fontWeight: 800, textTransform: 'uppercase', color: 'var(--nb-ink)', marginTop: '8px' }}>Unified Integration</div>
+        </div>
+      </div>
+
+      {/* --- HOW IT WORKS (React Flow) --- */}
+      <Section id="how-it-works" bg="var(--nb-ink)">
+        <div>
+          <SectionLabel dark>Architecture Flow</SectionLabel>
+          <div style={{ marginTop: '24px' }}>
+            <SectionTitle 
+              title="The Enforcement Loop" 
+              subtitle="Interact with the diagram below to understand how VCR evaluates agent intents against spending policies using off-chain infrastructure."
+            />
+          </div>
+        </div>
+
+        {/* Interactive React Flow Diagram */}
+        <ArchitectureFlow />
+        
+      </Section>
+
+      {/* --- STANDARDS / FEATURES (Interactive Grid) --- */}
+      <Section id="features" borderTop>
+        <SectionLabel>Core Standards</SectionLabel>
+        <SectionTitle 
+          title="Engineered for Agents" 
+          subtitle="VCR leverages established EIP conventions to ensure maximum interoperability and security for AI Wallets. Explore the features below."
+        />
+
+        {/* Interactive Showcase Component */}
+        <FeatureShowcase />
+        
+      </Section>
+
+      {/* --- SECURITY / CONSTRAINTS --- */}
+      <Section id="security" bg="var(--nb-ink)">
+        <SectionLabel dark>Verification Security</SectionLabel>
+        <SectionTitle 
+          title="On-Chain Guarantees, Off-Chain Speed" 
+          subtitle="VCR uses deterministic proofs to guarantee policy enforcement."
+        />
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(300px, 400px) 1fr', gap: '48px', alignItems: 'center' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            <div style={{ background: 'var(--nb-bg)', border: '3px solid var(--nb-error)', padding: '24px', boxShadow: '6px 6px 0 var(--nb-error)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px', color: 'var(--nb-error)' }}>
+                <span className="mono" style={{ fontWeight: 700, fontSize: '1.2rem', background: 'var(--nb-error)', color: 'var(--nb-bg)', padding: '4px 8px' }}>EIP</span>
+                <h4 style={{ margin: 0, textTransform: 'uppercase', color: 'var(--nb-error)' }}>EIP-3009 Authorizations</h4>
+              </div>
+              <p style={{ fontSize: '0.95rem', color: 'var(--nb-ink)', margin: 0 }}>Agents execute payments via <code className="mono">transferWithAuthorization</code> signatures, enabling gasless HTTP 402 handshakes on the x402 protocol without holding native ETH.</p>
+            </div>
+            
+            <div style={{ background: 'var(--nb-bg)', border: '3px solid var(--nb-ok)', padding: '24px', boxShadow: '6px 6px 0 var(--nb-ok)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px', color: 'var(--nb-ok)' }}>
+                <span className="mono" style={{ fontWeight: 700, fontSize: '1.2rem', background: 'var(--nb-ok)', color: 'var(--nb-bg)', padding: '4px 8px' }}>ENS</span>
+                <h4 style={{ margin: 0, textTransform: 'uppercase', color: 'var(--nb-ok)' }}>ENSIP-25 Text Records</h4>
+              </div>
+              <p style={{ fontSize: '0.95rem', color: 'var(--nb-ink)', margin: 0 }}>VCR links autonomous agents to multi-chain EVM addresses using parameterized <code className="mono">vcr.policy</code> text records mapped to deterministic IPFS CIDs.</p>
+            </div>
+          </div>
+          
+          <div style={{ 
+            background: '#111827', 
+            color: 'var(--nb-bg)',
+            padding: '32px',
+            border: '3px solid var(--nb-accent)',
+            boxShadow: '12px 12px 0 var(--nb-accent)',
+            fontFamily: 'var(--font-mono)',
+            fontSize: '0.85rem',
+            lineHeight: 1.6,
+            overflowX: 'auto',
+            position: 'relative'
+          }}>
+            <div style={{ position: 'absolute', top: 0, left: 0, right: 0, background: 'var(--nb-accent)', color: 'var(--nb-bg)', padding: '4px 16px', fontSize: '0.8rem', fontWeight: 700, textTransform: 'uppercase' }}>
+              canAgentSpend.ts
+            </div>
+<pre style={{ margin: 0, marginTop: '24px' }}><code>
+<span style={{ color: 'var(--nb-accent2)' }}>// 1. Fetch vcr.policy from ENS text record</span>
+<span style={{ color: 'var(--nb-accent)' }}>const</span> policyUri = <span style={{ color: 'var(--nb-accent)' }}>await</span> publicClient.getEnsText({'{'}
+  name: normalize(ensName), key: <span style={{ color: 'var(--nb-ok)' }}>'vcr.policy'</span>,
+{'}'});
+<span style={{ color: 'var(--nb-accent)' }}>if</span> (!policyUri) <span style={{ color: 'var(--nb-error)' }}>return false</span>;
+
+<span style={{ color: 'var(--nb-accent2)' }}>// 2. Fetch deterministic policy JSON from IPFS</span>
+<span style={{ color: 'var(--nb-accent)' }}>const</span> policy = <span style={{ color: 'var(--nb-accent)' }}>await</span> fetchFromIPFS(policyUri);
+
+<span style={{ color: 'var(--nb-accent2)' }}>// 3. Evaluate strict spending bounds (in wei)</span>
+<span style={{ color: 'var(--nb-accent)' }}>if</span> (BigInt(req.amount) &gt; BigInt(policy.constraints.maxTransaction.amount))
+  <span style={{ color: 'var(--nb-error)' }}>return</span> {'{'} allowed: <span style={{ color: 'var(--nb-error)' }}>false</span>, reason: <span style={{ color: 'var(--nb-ok)' }}>'Exceeds max transaction'</span> {'}'};
+
+<span style={{ color: 'var(--nb-accent2)' }}>// 4. Verify cross-chain allowed environments</span>
+<span style={{ color: 'var(--nb-accent)' }}>if</span> (!policy.constraints.allowedChains.includes(req.chain))
+  <span style={{ color: 'var(--nb-error)' }}>return</span> {'{'} allowed: <span style={{ color: 'var(--nb-error)' }}>false</span>, reason: <span style={{ color: 'var(--nb-ok)' }}>'Chain not allowed'</span> {'}'};
+
+<span style={{ color: 'var(--nb-accent2)' }}>// 5. Allow x402 payment execution via BitGo v3</span>
+<span style={{ color: 'var(--nb-ok)' }}>return</span> {'{'} allowed: <span style={{ color: 'var(--nb-ok)' }}>true</span> {'}'};
+</code></pre>
+          </div>
+        </div>
+      </Section>
+
+      {/* --- TECH STACK --- */}
+      <div style={{ background: 'var(--nb-bg)', color: 'var(--nb-ink)', padding: '64px 0', borderTop: 'var(--nb-border)', borderBottom: 'var(--nb-border)', position: 'relative', zIndex: 1 }}>
+        <div className="container" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '24px' }}>
+          <div style={{ fontSize: '1.5rem', fontWeight: 900, fontFamily: 'var(--font-display)', textTransform: 'uppercase' }}>
+            Powered By:
+          </div>
+          <div className="mono" style={{ display: 'flex', gap: '32px', flexWrap: 'wrap', fontSize: '1.2rem', fontWeight: 700, color: 'var(--nb-accent)' }}>
+            <span>VIEM</span>
+            <span>@BITGO</span>
+            <span>PINATA</span>
+            <span>FILEVERSE</span>
+            <span>ENS</span>
+          </div>
+        </div>
+      </div>
+
+      {/* --- FOOTER --- */}
+      <footer style={{ padding: '80px 0', background: 'var(--nb-bg)' }}>
+        <div className="container" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '48px' }}>
+          <div>
+            <div style={{ fontSize: '2.5rem', fontWeight: 900, fontFamily: 'var(--font-display)', margin: 0, color: 'var(--nb-ink)', textTransform: 'uppercase', letterSpacing: '-0.04em' }}>VCR Protocol</div>
+            <p className="mono" style={{ maxWidth: '400px', fontWeight: 500, marginTop: '24px', color: 'var(--nb-ink)', borderLeft: '4px solid var(--nb-accent)', paddingLeft: '16px' }}>
+              The industrial infrastructure layer for secure, deterministic AI agent spending. Built for the machine economy.
+            </p>
+          </div>
+          <div style={{ display: 'flex', gap: '64px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div className="mono" style={{ fontWeight: 800, fontSize: '0.9rem', color: 'var(--nb-accent2)', textTransform: 'uppercase', marginBottom: '8px' }}>Resources</div>
+              <a href="#" style={{ color: 'var(--nb-ink)', textDecoration: 'none', fontWeight: 700 }}>Documentation</a>
+              <a href="#" style={{ color: 'var(--nb-ink)', textDecoration: 'none', fontWeight: 700 }}>GitHub Repo</a>
+              <a href="#" style={{ color: 'var(--nb-ink)', textDecoration: 'none', fontWeight: 700 }}>EIP-8004 Specs</a>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div className="mono" style={{ fontWeight: 800, fontSize: '0.9rem', color: 'var(--nb-accent2)', textTransform: 'uppercase', marginBottom: '8px' }}>Network</div>
+              <a href="#" style={{ color: 'var(--nb-ink)', textDecoration: 'none', fontWeight: 700 }}>Base Sepolia</a>
+              <a href="#" style={{ color: 'var(--nb-ink)', textDecoration: 'none', fontWeight: 700 }}>Mainnet (Soon)</a>
+            </div>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }
