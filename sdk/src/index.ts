@@ -11,6 +11,7 @@ export type {
   PolicyConstraints, // alias for backward compatibility
   PolicyMetadata,
   TimeRestrictions,
+  SlippageProtection,
   TokenAmount,
   // Spend verification
   SpendRequest,
@@ -148,11 +149,13 @@ export type { RegistrationResult, ReputationSummary } from "./erc8004.js";
 // ─── BitGo ────────────────────────────────────────────────────────────────────
 
 export {
+  getBitGoClient,
   createAgentWallet,
   getWallet,
   getWalletPolicy,
   setWalletPolicy,
   sendTransaction,
+  unlockBitGoSession,
   approvePendingApproval,
   rejectPendingApproval,
   verifyWebhookSignature,

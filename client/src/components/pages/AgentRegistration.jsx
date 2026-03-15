@@ -2029,8 +2029,8 @@ export default function AgentRegistration() {
               </div>
 
               <div className="wizard-actions">
-                <Link to="/demo" className="btn btn-ghost">
-                  Open paywall demo
+                <Link to="/demos" className="btn btn-ghost">
+                  Open demos
                 </Link>
                 <Link to="/explorer" className="btn btn-ghost">
                   Open explorer
