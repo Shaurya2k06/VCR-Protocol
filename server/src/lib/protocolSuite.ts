@@ -34,11 +34,27 @@ export interface ProtocolSuiteResult {
   };
   currentDailySpent: string;
   simulatedDailyFailure: boolean;
+  demoAdjustedTimeWindow: boolean;
   scenarios: ProtocolSuiteScenarioResult[];
 }
 
 function minBigInt(values: bigint[]): bigint {
   return values.reduce((smallest, value) => (value < smallest ? value : smallest));
+}
+
+function maxBigInt(values: bigint[]): bigint {
+  return values.reduce((largest, value) => (value > largest ? value : largest));
+}
+
+function choosePreferredAllowedAmount(defaults: ProtocolSuiteConfig, token: string): bigint {
+  const normalizedToken = token.toLowerCase();
+  if (normalizedToken.includes("eth")) {
+    // 0.001 ETH in wei for hteth/eth-style demo constraints.
+    return 1_000_000_000_000_000n;
+  }
+
+  const parsed = BigInt(defaults.amount);
+  return parsed > 0n ? parsed : 100_000n;
 }
 
 function buildAllowedMicropaymentRequest(
@@ -55,7 +71,8 @@ function buildAllowedMicropaymentRequest(
     return null;
   }
 
-  const preferredAmount = BigInt(defaults.amount);
+  const token = policy.constraints.allowedTokens[0] ?? defaults.token;
+  const preferredAmount = choosePreferredAllowedAmount(defaults, token);
   const amount = minBigInt([preferredAmount, maxTransaction, remaining]);
   if (amount <= 0n) {
     return null;
@@ -63,7 +80,7 @@ function buildAllowedMicropaymentRequest(
 
   return {
     amount: amount.toString(),
-    token: policy.constraints.allowedTokens[0] ?? defaults.token,
+    token,
     recipient: policy.constraints.allowedRecipients[0] ?? defaults.recipient,
     chain: policy.constraints.allowedChains[0] ?? defaults.network,
   };
@@ -75,9 +92,23 @@ export function buildProtocolSuite(
   currentDailySpent: string,
   defaults: ProtocolSuiteConfig,
 ): ProtocolSuiteResult {
-  const allowedRequest = buildAllowedMicropaymentRequest(policy, currentDailySpent, defaults);
-  const maxTransaction = BigInt(policy.constraints.maxTransaction.amount);
-  const dailyLimit = BigInt(policy.constraints.dailyLimit.amount);
+  const demoAdjustedTimeWindow = Boolean(policy.constraints.timeRestrictions);
+  const suitePolicy: VCRPolicy = demoAdjustedTimeWindow
+    ? {
+        ...policy,
+        constraints: {
+          ...policy.constraints,
+          timeRestrictions: { timezone: "UTC", allowedHours: [0, 24] },
+        },
+      }
+    : policy;
+
+  const allowedRequest = buildAllowedMicropaymentRequest(suitePolicy, currentDailySpent, defaults);
+  const maxTransaction = BigInt(suitePolicy.constraints.maxTransaction.amount);
+  const dailyLimit = BigInt(suitePolicy.constraints.dailyLimit.amount);
+  const defaultToken = suitePolicy.constraints.allowedTokens[0] ?? defaults.token;
+  const defaultChain = suitePolicy.constraints.allowedChains[0] ?? defaults.network;
+  const defaultRecipient = suitePolicy.constraints.allowedRecipients[0] ?? defaults.recipient;
 
   const scenarios: Array<{
     id: string;
@@ -90,15 +121,38 @@ export function buildProtocolSuite(
   }> = [];
 
   if (allowedRequest) {
+    const secondaryRecipient =
+      suitePolicy.constraints.allowedRecipients[1] ??
+      suitePolicy.constraints.allowedRecipients[0] ??
+      defaults.recipient;
+
     scenarios.push({
       id: "allowed-micropayment",
       label: "Allowed micropayment",
-      description: "Uses an allowed recipient, token, chain, and an amount within the live policy budget.",
+      description: "Uses an allowed recipient, token, chain, and a small amount within policy bounds.",
       expectedAllowed: true,
       request: allowedRequest,
       dailySpentAtCheck: currentDailySpent,
       simulated: false,
     });
+
+    const followUpAmount = minBigInt([BigInt(allowedRequest.amount), maxTransaction]);
+
+    if (followUpAmount > 0n) {
+      scenarios.push({
+        id: "allowed-second-recipient",
+        label: "Allowed second recipient",
+        description: "A second send to another whitelisted recipient also clears the same live policy checks.",
+        expectedAllowed: true,
+        request: {
+          ...allowedRequest,
+          amount: followUpAmount.toString(),
+          recipient: secondaryRecipient,
+        },
+        dailySpentAtCheck: currentDailySpent,
+        simulated: false,
+      });
+    }
   }
 
   scenarios.push({
@@ -108,8 +162,8 @@ export function buildProtocolSuite(
     expectedAllowed: false,
     request: {
       amount: allowedRequest?.amount ?? defaults.amount,
-      token: allowedRequest?.token ?? defaults.token,
-      chain: allowedRequest?.chain ?? defaults.network,
+      token: allowedRequest?.token ?? defaultToken,
+      chain: allowedRequest?.chain ?? defaultChain,
       recipient: "0x000000000000000000000000000000000000dEaD",
     },
     dailySpentAtCheck: currentDailySpent,
@@ -117,72 +171,61 @@ export function buildProtocolSuite(
   });
 
   scenarios.push({
-    id: "blocked-token",
-    label: "Blocked token",
-    description: "Uses a token outside the policy allowlist.",
+    id: "blocked-over-limit",
+    label: "Blocked over-limit amount",
+    description: "Uses a larger transfer amount that exceeds the policy max transaction threshold.",
     expectedAllowed: false,
     request: {
-      amount: allowedRequest?.amount ?? defaults.amount,
-      recipient: allowedRequest?.recipient ?? policy.constraints.allowedRecipients[0] ?? defaults.recipient,
-      chain: allowedRequest?.chain ?? defaults.network,
-      token: "DAI",
+      amount: maxBigInt([
+        maxTransaction + 1n,
+        (allowedRequest ? BigInt(allowedRequest.amount) : BigInt(defaults.amount)) * 9n,
+      ]).toString(),
+      recipient: allowedRequest?.recipient ?? defaultRecipient,
+      token: allowedRequest?.token ?? defaultToken,
+      chain: allowedRequest?.chain ?? defaultChain,
     },
     dailySpentAtCheck: currentDailySpent,
     simulated: false,
   });
+
+  // Daily-limit scenario: evaluate after two successful sends.
+  // We choose an amount that exceeds remaining daily budget while trying to
+  // stay <= maxTransaction when possible.
+  const firstAmount = allowedRequest ? BigInt(allowedRequest.amount) : 0n;
+  const secondAmount = scenarios.find((s) => s.id === "allowed-second-recipient")
+    ? BigInt(scenarios.find((s) => s.id === "allowed-second-recipient")!.request.amount)
+    : firstAmount;
+  const spentAfterTwo = BigInt(currentDailySpent) + firstAmount + secondAmount;
+  const remainingAfterTwo = dailyLimit > spentAfterTwo ? dailyLimit - spentAfterTwo : 0n;
+  const dailyBlockAmount =
+    remainingAfterTwo < maxTransaction
+      ? remainingAfterTwo + 1n
+      : minBigInt([maxTransaction, firstAmount > 0n ? firstAmount : maxTransaction]);
+
+  const simulatedDailySpentAtCheck =
+    remainingAfterTwo < maxTransaction
+      ? spentAfterTwo.toString()
+      : maxBigInt([0n, dailyLimit - dailyBlockAmount + 1n]).toString();
 
   scenarios.push({
-    id: "blocked-chain",
-    label: "Blocked chain",
-    description: "Uses a chain outside the policy allowlist.",
+    id: "blocked-daily-limit",
+    label: "Blocked daily limit",
+    description:
+      "Evaluates after prior successful sends; request is denied because cumulative spend would exceed the daily limit.",
     expectedAllowed: false,
     request: {
-      amount: allowedRequest?.amount ?? defaults.amount,
-      recipient: allowedRequest?.recipient ?? policy.constraints.allowedRecipients[0] ?? defaults.recipient,
-      token: allowedRequest?.token ?? defaults.token,
-      chain: "ethereum",
+      amount: dailyBlockAmount.toString(),
+      recipient: allowedRequest?.recipient ?? defaultRecipient,
+      token: allowedRequest?.token ?? defaultToken,
+      chain: allowedRequest?.chain ?? defaultChain,
     },
-    dailySpentAtCheck: currentDailySpent,
-    simulated: false,
+    dailySpentAtCheck: simulatedDailySpentAtCheck,
+    simulated: simulatedDailySpentAtCheck !== spentAfterTwo.toString(),
   });
-
-  scenarios.push({
-    id: "blocked-max-transaction",
-    label: "Blocked max transaction",
-    description: "Uses an amount one base unit above the policy max transaction size.",
-    expectedAllowed: false,
-    request: {
-      amount: (maxTransaction + 1n).toString(),
-      recipient: allowedRequest?.recipient ?? policy.constraints.allowedRecipients[0] ?? defaults.recipient,
-      token: allowedRequest?.token ?? defaults.token,
-      chain: allowedRequest?.chain ?? defaults.network,
-    },
-    dailySpentAtCheck: currentDailySpent,
-    simulated: false,
-  });
-
-  let simulatedDailyFailure = false;
-  if (allowedRequest) {
-    const amount = BigInt(allowedRequest.amount);
-    const simulatedSpent = dailyLimit >= amount ? dailyLimit - amount + 1n : dailyLimit;
-
-    if (simulatedSpent >= 0n) {
-      simulatedDailyFailure = true;
-      scenarios.push({
-        id: "blocked-daily-limit",
-        label: "Blocked daily limit",
-        description: "Simulates the same micropayment after the daily budget has nearly been exhausted.",
-        expectedAllowed: false,
-        request: allowedRequest,
-        dailySpentAtCheck: simulatedSpent.toString(),
-        simulated: true,
-      });
-    }
-  }
 
   const results: ProtocolSuiteScenarioResult[] = scenarios.map((scenario) => {
     const evaluation = canAgentSpendWithPolicy(
-      policy,
+      suitePolicy,
       scenario.request,
       scenario.dailySpentAtCheck,
     );
@@ -206,14 +249,15 @@ export function buildProtocolSuite(
     policy: {
       ensName: policy.ensName,
       description: policy.metadata.description,
-      maxTransaction: policy.constraints.maxTransaction.amount,
-      dailyLimit: policy.constraints.dailyLimit.amount,
-      allowedTokens: policy.constraints.allowedTokens,
-      allowedChains: policy.constraints.allowedChains,
-      allowedRecipients: policy.constraints.allowedRecipients,
+      maxTransaction: suitePolicy.constraints.maxTransaction.amount,
+      dailyLimit: suitePolicy.constraints.dailyLimit.amount,
+      allowedTokens: suitePolicy.constraints.allowedTokens,
+      allowedChains: suitePolicy.constraints.allowedChains,
+      allowedRecipients: suitePolicy.constraints.allowedRecipients,
     },
     currentDailySpent,
-    simulatedDailyFailure,
+    simulatedDailyFailure: false,
+    demoAdjustedTimeWindow,
     scenarios: results,
   };
 }
