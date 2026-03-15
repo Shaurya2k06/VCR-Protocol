@@ -80,6 +80,16 @@ export const vcr = {
       method: "PUT",
       body,
     }),
+  updateAgentPolicy: (agentId, body) =>
+    api(`/api/register/${encodeURIComponent(agentId)}/policy`, {
+      method: "PUT",
+      body,
+    }),
+  updateAgentRulesDocument: (agentId, body) =>
+    api(`/api/register/${encodeURIComponent(agentId)}/rules`, {
+      method: "PUT",
+      body,
+    }),
   prepareSelfOwnedEnsSetup: (agentId, body) =>
     api(`/api/register/${encodeURIComponent(agentId)}/self-owned/prepare`, {
       method: "POST",

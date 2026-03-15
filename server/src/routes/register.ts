@@ -2,6 +2,7 @@
 import { Router } from "express";
 import {
   createAgent as createSdkAgent,
+  createPolicy,
   registerAgent,
   waitForAgentRegistration,
   getAgentOwner,
@@ -10,6 +11,7 @@ import {
   pinPolicy,
   setAllENSRecords,
   setEnsTextRecords,
+  setVCRPolicyRecord,
   ERC8004_ADDRESSES,
   prepareSelfOwnedEnsTransactions,
   getVCRPolicyContenthashUri,
@@ -20,6 +22,7 @@ import {
 import type {
   AgentMetadata,
   CreateAgentConfig,
+  PolicyConstraints,
   VCRPolicy,
 } from "@vcr-protocol/sdk";
 import { PinataSDK } from "pinata";
@@ -36,7 +39,9 @@ import {
   getAgentsByOwner,
   getAllAgents,
   saveAgent,
+  updateAgentPolicy as updateAgentPolicyRecord,
   updateAgentProfile,
+  updateAgentRulesDocument,
 } from "../models/Agent.js";
 import { getAddress, recoverMessageAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -294,6 +299,93 @@ function buildProfileUpdateMessage(agentId: number, ensName: string, issuedAt: s
   ].join("\n");
 }
 
+function buildPolicyUpdateMessage(agentId: number, ensName: string, issuedAt: string): string {
+  return [
+    "VCR policy update",
+    `Agent ID: ${agentId}`,
+    `ENS: ${ensName}`,
+    `Issued At: ${issuedAt}`,
+  ].join("\n");
+}
+
+function ddocTextNode(value: string): Record<string, unknown> {
+  const text = value.trim();
+  return {
+    type: "text",
+    text: text.length > 0 ? text : "Not provided",
+  };
+}
+
+function ddocParagraph(value: string): Record<string, unknown> {
+  return {
+    type: "paragraph",
+    content: [ddocTextNode(value)],
+  };
+}
+
+function ddocHeading(level: number, value: string): Record<string, unknown> {
+  return {
+    type: "heading",
+    attrs: { level },
+    content: [ddocTextNode(value)],
+  };
+}
+
+function buildPolicyRulesSnapshotDdoc(policy: VCRPolicy, ensName: string): Record<string, unknown> {
+  const constraints = policy.constraints;
+  const content: Record<string, unknown>[] = [
+    ddocHeading(1, `${ensName} policy snapshot`),
+    ddocParagraph(`Updated at: ${policy.metadata.createdAt}`),
+    ddocParagraph(`Agent: ${policy.agentId}`),
+    ddocHeading(2, "Transaction limits"),
+    ddocParagraph(
+      `Max transaction: ${constraints.maxTransaction.amount} ${constraints.maxTransaction.token} on ${constraints.maxTransaction.chain}`,
+    ),
+    ddocParagraph(
+      `Daily limit: ${constraints.dailyLimit.amount} ${constraints.dailyLimit.token} on ${constraints.dailyLimit.chain}`,
+    ),
+    ddocHeading(2, "Allowed tokens"),
+  ];
+
+  for (const token of constraints.allowedTokens) {
+    content.push(ddocParagraph(`• ${token}`));
+  }
+
+  content.push(ddocHeading(2, "Allowed chains"));
+  for (const chain of constraints.allowedChains) {
+    content.push(ddocParagraph(`• ${chain}`));
+  }
+
+  content.push(ddocHeading(2, "Allowed recipients"));
+  for (const recipient of constraints.allowedRecipients) {
+    content.push(ddocParagraph(`• ${recipient}`));
+  }
+
+  if (constraints.timeRestrictions) {
+    const [start, end] = constraints.timeRestrictions.allowedHours;
+    content.push(ddocHeading(2, "Time restrictions"));
+    content.push(
+      ddocParagraph(
+        `Timezone: ${constraints.timeRestrictions.timezone} | Allowed hours: ${start}:00 - ${end}:00`,
+      ),
+    );
+  }
+
+  if (policy.metadata.description) {
+    content.push(ddocHeading(2, "Description"));
+    content.push(ddocParagraph(policy.metadata.description));
+  }
+
+  if (policy.metadata.expiresAt) {
+    content.push(ddocParagraph(`Expires at: ${policy.metadata.expiresAt}`));
+  }
+
+  return {
+    type: "doc",
+    content,
+  };
+}
+
 function buildSelfOwnedEnsSetupMessage(agentId: number, ensName: string, issuedAt: string): string {
   return [
     "VCR self-owned ENS setup",
@@ -301,6 +393,19 @@ function buildSelfOwnedEnsSetupMessage(agentId: number, ensName: string, issuedA
     `ENS: ${ensName}`,
     `Issued At: ${issuedAt}`,
   ].join("\n");
+}
+
+function buildRulesDocumentUpdateMessage(agentId: number, ensName: string, issuedAt: string): string {
+  return [
+    "VCR rules document update",
+    `Agent ID: ${agentId}`,
+    `ENS: ${ensName}`,
+    `Issued At: ${issuedAt}`,
+  ].join("\n");
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function guessExtensionFromMimeType(mimeType: string): string {
@@ -349,6 +454,25 @@ async function uploadProfileAsset(dataUrl: string, fallbackName: string) {
   const gatewayUrl = buildPinataGatewayUrl(result.cid);
   if (!gatewayUrl) {
     throw new Error("Failed to build a Pinata gateway URL for the uploaded image");
+  }
+
+  return {
+    cid: result.cid,
+    ipfsUri: `ipfs://${result.cid}`,
+    gatewayUrl,
+  };
+}
+
+async function uploadRulesDocumentJson(payload: Record<string, unknown>) {
+  const pinata = new PinataSDK({
+    pinataJwt: process.env.PINATA_JWT!,
+    pinataGateway: process.env.PINATA_GATEWAY!,
+  });
+
+  const result = await pinata.upload.public.json(payload);
+  const gatewayUrl = buildPinataGatewayUrl(result.cid);
+  if (!gatewayUrl) {
+    throw new Error("Failed to build a Pinata gateway URL for the uploaded rules document");
   }
 
   return {
@@ -1065,6 +1189,235 @@ router.put("/:agentId/profile", async (req, res) => {
         avatarTextRecord: uploadedTextRecords.avatar,
         headerTextRecord: uploadedTextRecords.header,
       },
+      agent: updated ?? agent,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+router.put("/:agentId/policy", async (req, res) => {
+  try {
+    const agentId = parseInt(req.params.agentId, 10);
+    if (Number.isNaN(agentId)) {
+      return res.status(400).json({ error: "Invalid agentId" });
+    }
+
+    const agent = await getAgentByChainId(agentId);
+    if (!agent || !agent.ensName) {
+      return res.status(404).json({ error: "Agent not found or ENS name missing" });
+    }
+
+    const {
+      constraints,
+      description,
+      expiresAt,
+      actorAddress,
+      signature,
+      issuedAt,
+      syncEns = true,
+    } = req.body as {
+      constraints?: PolicyConstraints;
+      description?: string;
+      expiresAt?: string;
+      actorAddress?: string;
+      signature?: `0x${string}`;
+      issuedAt?: string;
+      syncEns?: boolean;
+    };
+
+    if (!constraints || typeof constraints !== "object" || Array.isArray(constraints)) {
+      return res.status(400).json({ error: "constraints are required" });
+    }
+    if (!actorAddress || !signature || !issuedAt) {
+      return res.status(400).json({ error: "actorAddress, signature, and issuedAt are required" });
+    }
+
+    const normalizedActor = getAddress(actorAddress);
+    const issuedAtDate = new Date(issuedAt);
+    if (Number.isNaN(issuedAtDate.getTime())) {
+      return res.status(400).json({ error: "issuedAt must be a valid ISO timestamp" });
+    }
+    if (Math.abs(Date.now() - issuedAtDate.getTime()) > 10 * 60 * 1000) {
+      return res.status(400).json({ error: "Policy update signature has expired. Please try again." });
+    }
+
+    const recoveredAddress = await recoverMessageAddress({
+      message: buildPolicyUpdateMessage(agentId, agent.ensName, issuedAt),
+      signature,
+    });
+
+    if (recoveredAddress.toLowerCase() !== normalizedActor.toLowerCase()) {
+      return res.status(403).json({ error: "Signature did not match the connected wallet" });
+    }
+
+    if (!isAuthorizedAgentActor(agent, normalizedActor)) {
+      return res.status(403).json({ error: "Connected wallet is not allowed to update this agent policy" });
+    }
+
+    const qualifiedAgentId =
+      `eip155:11155111:${ERC8004_ADDRESSES.identityRegistry.sepolia}:${agentId}`;
+
+    const policy = createPolicy(qualifiedAgentId, constraints, {
+      createdBy: normalizedActor,
+      description: toOptionalString(description),
+      expiresAt: toOptionalString(expiresAt),
+    });
+
+    const pinResult = await pinPolicy(policy);
+    const rulesSnapshotDdoc = buildPolicyRulesSnapshotDdoc(policy, agent.ensName);
+    const uploadedRulesSnapshot = await uploadRulesDocumentJson(rulesSnapshotDdoc);
+    const rulesSnapshotRaw = JSON.stringify(rulesSnapshotDdoc, null, 2);
+
+    const shouldSyncEns = syncEns !== false;
+    const isSelfOwned = agent.registrationMode === "self-owned";
+
+    let ensPolicyTxHash: string | undefined;
+    let ensRulesTxHash: string | undefined;
+    let ensSynced = false;
+
+    if (shouldSyncEns && !isSelfOwned) {
+      const ensPolicyResult = await setVCRPolicyRecord(agent.ensName, pinResult.ipfsUri);
+      ensPolicyTxHash = ensPolicyResult.txHash;
+      const ensRulesResult = await setEnsTextRecords(agent.ensName, {
+        "vcr.rules": uploadedRulesSnapshot.ipfsUri,
+      });
+      ensRulesTxHash = ensRulesResult.txHash;
+      ensSynced = true;
+    }
+
+    await updateAgentPolicyRecord(agentId, {
+      policyUri: pinResult.ipfsUri,
+      policyCid: pinResult.cid,
+      supportedTokens: policy.constraints.allowedTokens,
+      supportedChains: policy.constraints.allowedChains,
+    });
+
+    const updated = await updateAgentRulesDocument(agentId, {
+      rulesDocumentUrl: uploadedRulesSnapshot.gatewayUrl,
+      rulesDocumentRaw: rulesSnapshotRaw,
+      rulesDocumentSource: "ipfs",
+    });
+
+    return res.json({
+      success: true,
+      agentId,
+      ensName: agent.ensName,
+      policy: {
+        ...policy,
+        ipfs_cid: pinResult.cid,
+      },
+      policyCid: pinResult.cid,
+      policyUri: pinResult.ipfsUri,
+      policyGatewayUrl: buildPinataGatewayUrl(pinResult.ipfsUri),
+      rulesDocumentCid: uploadedRulesSnapshot.cid,
+      rulesDocumentIpfsUri: uploadedRulesSnapshot.ipfsUri,
+      rulesDocumentGatewayUrl: uploadedRulesSnapshot.gatewayUrl,
+      ensSynced,
+      ensPolicyTxHash,
+      ensRulesTxHash,
+      ensTxHash: ensPolicyTxHash,
+      note: isSelfOwned && shouldSyncEns
+        ? "Self-owned ENS detected. Policy and rules dDoc were updated/pinned, but ENS pointers (vcr.policy and vcr.rules) must be updated by the ENS manager wallet."
+        : undefined,
+      agent: updated ?? agent,
+    });
+  } catch (err) {
+    return res.status(400).json({ error: (err as Error).message });
+  }
+});
+
+router.put("/:agentId/rules", async (req, res) => {
+  try {
+    const agentId = parseInt(req.params.agentId, 10);
+    if (Number.isNaN(agentId)) {
+      return res.status(400).json({ error: "Invalid agentId" });
+    }
+
+    const agent = await getAgentByChainId(agentId);
+    if (!agent || !agent.ensName) {
+      return res.status(404).json({ error: "Agent not found or ENS name missing" });
+    }
+
+    const {
+      rulesDocumentJson,
+      rulesDocumentRaw,
+      actorAddress,
+      signature,
+      issuedAt,
+    } = req.body as {
+      rulesDocumentJson?: unknown;
+      rulesDocumentRaw?: string;
+      actorAddress?: string;
+      signature?: `0x${string}`;
+      issuedAt?: string;
+    };
+
+    if (!isJsonObject(rulesDocumentJson)) {
+      return res.status(400).json({
+        error: "rulesDocumentJson must be a JSON object (dDoc payload)",
+      });
+    }
+    if (!actorAddress || !signature || !issuedAt) {
+      return res.status(400).json({ error: "actorAddress, signature, and issuedAt are required" });
+    }
+
+    const normalizedActor = getAddress(actorAddress);
+    const issuedAtDate = new Date(issuedAt);
+    if (Number.isNaN(issuedAtDate.getTime())) {
+      return res.status(400).json({ error: "issuedAt must be a valid ISO timestamp" });
+    }
+    if (Math.abs(Date.now() - issuedAtDate.getTime()) > 10 * 60 * 1000) {
+      return res.status(400).json({ error: "Rules update signature has expired. Please try again." });
+    }
+
+    const recoveredAddress = await recoverMessageAddress({
+      message: buildRulesDocumentUpdateMessage(agentId, agent.ensName, issuedAt),
+      signature,
+    });
+
+    if (recoveredAddress.toLowerCase() !== normalizedActor.toLowerCase()) {
+      return res.status(403).json({ error: "Signature did not match the connected wallet" });
+    }
+
+    if (!isAuthorizedAgentActor(agent, normalizedActor)) {
+      return res.status(403).json({ error: "Connected wallet is not allowed to update this agent rules document" });
+    }
+
+    const uploadedRules = await uploadRulesDocumentJson(rulesDocumentJson);
+    const rawSnapshot =
+      toOptionalString(rulesDocumentRaw) ?? JSON.stringify(rulesDocumentJson, null, 2);
+
+    let ensTxHash: string | undefined;
+    let ensSynced = false;
+
+    if (agent.registrationMode !== "self-owned") {
+      const ensResult = await setEnsTextRecords(agent.ensName, {
+        "vcr.rules": uploadedRules.ipfsUri,
+      });
+      ensTxHash = ensResult.txHash;
+      ensSynced = true;
+    }
+
+    const updated = await updateAgentRulesDocument(agentId, {
+      rulesDocumentUrl: uploadedRules.gatewayUrl,
+      rulesDocumentRaw: rawSnapshot,
+      rulesDocumentSource: "ipfs",
+    });
+
+    return res.json({
+      success: true,
+      agentId,
+      ensName: agent.ensName,
+      cid: uploadedRules.cid,
+      ipfsUri: uploadedRules.ipfsUri,
+      gatewayUrl: uploadedRules.gatewayUrl,
+      ensTextRecord: "vcr.rules",
+      ensSynced,
+      ensTxHash,
+      note: ensSynced
+        ? "Rules document pointer synced to ENS text record vcr.rules"
+        : "Self-owned ENS detected. Rules document stored in DB/IPFS; sync vcr.rules manually from your ENS manager wallet if needed.",
       agent: updated ?? agent,
     });
   } catch (err) {

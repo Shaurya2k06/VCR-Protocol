@@ -59,6 +59,24 @@ function buildProfileUpdateMessage(agentId, ensName, issuedAt) {
   ].join("\n");
 }
 
+function buildPolicyUpdateMessage(agentId, ensName, issuedAt) {
+  return [
+    "VCR policy update",
+    `Agent ID: ${agentId}`,
+    `ENS: ${ensName}`,
+    `Issued At: ${issuedAt}`,
+  ].join("\n");
+}
+
+function buildRulesDocumentUpdateMessage(agentId, ensName, issuedAt) {
+  return [
+    "VCR rules document update",
+    `Agent ID: ${agentId}`,
+    `ENS: ${ensName}`,
+    `Issued At: ${issuedAt}`,
+  ].join("\n");
+}
+
 function AgentCard({ agent, onSelect, owned }) {
   const headerImageUrl = toGatewayUrl(agent.headerUri || "");
   const avatarImageUrl = toGatewayUrl(agent.avatarUri || "");
@@ -193,6 +211,13 @@ export default function PolicyExplorer() {
   const [uploadingProfile, setUploadingProfile] = useState(false);
   const [loadingEnsRecords, setLoadingEnsRecords] = useState(false);
   const [ensRecords, setEnsRecords] = useState(null);
+  const [policyConstraintsDraft, setPolicyConstraintsDraft] = useState("");
+  const [loadingPolicyDraft, setLoadingPolicyDraft] = useState(false);
+  const [updatingPolicy, setUpdatingPolicy] = useState(false);
+  const [policyUpdateResult, setPolicyUpdateResult] = useState(null);
+  const [rulesDocumentDraft, setRulesDocumentDraft] = useState("");
+  const [updatingRulesDocument, setUpdatingRulesDocument] = useState(false);
+  const [rulesUpdateResult, setRulesUpdateResult] = useState(null);
 
   const connectWallet = async () => {
     const provider = getWalletProvider();
@@ -358,6 +383,93 @@ export default function PolicyExplorer() {
     : "";
 
   useEffect(() => {
+    if (!selectedAgent?.ensName) {
+      setPolicyConstraintsDraft("");
+      setPolicyUpdateResult(null);
+      return;
+    }
+
+    let active = true;
+
+    async function loadPolicyConstraintsDraft() {
+      setLoadingPolicyDraft(true);
+      try {
+        const response = await vcr.getPolicy(selectedAgent.ensName);
+        if (!active) return;
+
+        const constraints = response?.policy?.constraints;
+        if (constraints && typeof constraints === "object" && !Array.isArray(constraints)) {
+          setPolicyConstraintsDraft(JSON.stringify(constraints, null, 2));
+          return;
+        }
+      } catch {
+        // Fall through to defaults.
+      } finally {
+        if (active) {
+          setLoadingPolicyDraft(false);
+        }
+      }
+
+      if (!active) return;
+      const defaultToken = selectedAgent.supportedTokens?.[0] || "USDC";
+      const defaultChain = selectedAgent.supportedChains?.[0] || "base-sepolia";
+      setPolicyConstraintsDraft(
+        JSON.stringify(
+          {
+            maxTransaction: { amount: "0", token: defaultToken, chain: defaultChain },
+            dailyLimit: { amount: "0", token: defaultToken, chain: defaultChain },
+            allowedRecipients: [],
+            allowedTokens: selectedAgent.supportedTokens || ["USDC"],
+            allowedChains: selectedAgent.supportedChains || ["base-sepolia"],
+          },
+          null,
+          2,
+        ),
+      );
+    }
+
+    setPolicyUpdateResult(null);
+    void loadPolicyConstraintsDraft();
+
+    return () => {
+      active = false;
+    };
+  }, [selectedAgent?.agentId, selectedAgent?.ensName]);
+
+  useEffect(() => {
+    if (!selectedAgent) {
+      setRulesDocumentDraft("");
+      setRulesUpdateResult(null);
+      return;
+    }
+
+    const existingRaw = typeof selectedAgent.rulesDocumentRaw === "string"
+      ? selectedAgent.rulesDocumentRaw.trim()
+      : "";
+
+    if (existingRaw) {
+      try {
+        const parsed = JSON.parse(existingRaw);
+        setRulesDocumentDraft(JSON.stringify(parsed, null, 2));
+      } catch {
+        setRulesDocumentDraft(existingRaw);
+      }
+    } else {
+      setRulesDocumentDraft(JSON.stringify({
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: "Update your agent rules here" }],
+          },
+        ],
+      }, null, 2));
+    }
+
+    setRulesUpdateResult(null);
+  }, [selectedAgent?.agentId]);
+
+  useEffect(() => {
     if (!selectedAgent?.agentId) {
       setEnsRecords(null);
       return;
@@ -453,6 +565,132 @@ export default function PolicyExplorer() {
       setError(uploadError.message);
     } finally {
       setUploadingProfile(false);
+    }
+  };
+
+  const publishRulesDocument = async () => {
+    if (!selectedAgent) return;
+
+    const draft = rulesDocumentDraft.trim();
+    if (!draft) {
+      setError("Rules dDoc JSON is required.");
+      return;
+    }
+
+    setError("");
+    setRulesUpdateResult(null);
+    setUpdatingRulesDocument(true);
+
+    try {
+      const provider = getWalletProvider();
+      if (!provider || !wallet.address) {
+        throw new Error("Connect the creator wallet before updating rules.");
+      }
+
+      const parsedDocument = JSON.parse(draft);
+      if (!parsedDocument || typeof parsedDocument !== "object" || Array.isArray(parsedDocument)) {
+        throw new Error("Rules dDoc must be a JSON object.");
+      }
+
+      const issuedAt = new Date().toISOString();
+      const message = buildRulesDocumentUpdateMessage(
+        selectedAgent.agentId,
+        selectedAgent.ensName,
+        issuedAt,
+      );
+      const signature = await provider.request({
+        method: "personal_sign",
+        params: [message, wallet.address],
+      });
+
+      const response = await vcr.updateAgentRulesDocument(selectedAgent.agentId, {
+        rulesDocumentJson: parsedDocument,
+        rulesDocumentRaw: draft,
+        actorAddress: wallet.address,
+        signature,
+        issuedAt,
+      });
+
+      const updatedAgent = response.agent;
+      setSelectedAgent(updatedAgent);
+      setAllAgents((current) =>
+        current.map((agent) => (agent.agentId === updatedAgent.agentId ? updatedAgent : agent)),
+      );
+      setMyAgents((current) =>
+        current.map((agent) => (agent.agentId === updatedAgent.agentId ? updatedAgent : agent)),
+      );
+      setRulesUpdateResult(response);
+    } catch (updateError) {
+      setError(updateError.message);
+    } finally {
+      setUpdatingRulesDocument(false);
+    }
+  };
+
+  const publishPolicyUpdate = async () => {
+    if (!selectedAgent) return;
+
+    const draft = policyConstraintsDraft.trim();
+    if (!draft) {
+      setError("Policy constraints JSON is required.");
+      return;
+    }
+
+    setError("");
+    setPolicyUpdateResult(null);
+    setUpdatingPolicy(true);
+
+    try {
+      const provider = getWalletProvider();
+      if (!provider || !wallet.address) {
+        throw new Error("Connect the creator wallet before updating policy.");
+      }
+
+      const constraints = JSON.parse(draft);
+      if (!constraints || typeof constraints !== "object" || Array.isArray(constraints)) {
+        throw new Error("Policy constraints must be a JSON object.");
+      }
+
+      const issuedAt = new Date().toISOString();
+      const message = buildPolicyUpdateMessage(
+        selectedAgent.agentId,
+        selectedAgent.ensName,
+        issuedAt,
+      );
+      const signature = await provider.request({
+        method: "personal_sign",
+        params: [message, wallet.address],
+      });
+
+      const response = await vcr.updateAgentPolicy(selectedAgent.agentId, {
+        constraints,
+        actorAddress: wallet.address,
+        signature,
+        issuedAt,
+        syncEns: true,
+      });
+
+      const updatedAgent = response.agent;
+      setSelectedAgent(updatedAgent);
+      setAllAgents((current) =>
+        current.map((agent) => (agent.agentId === updatedAgent.agentId ? updatedAgent : agent)),
+      );
+      setMyAgents((current) =>
+        current.map((agent) => (agent.agentId === updatedAgent.agentId ? updatedAgent : agent)),
+      );
+
+      try {
+        const recordsResponse = await vcr.getAgentEnsRecords(selectedAgent.agentId);
+        setEnsRecords(recordsResponse.records ?? null);
+      } catch {
+        // Keep existing ENS record state when refresh fails.
+      }
+
+      setPolicyUpdateResult(response);
+    } catch (updateError) {
+      setError(updateError.message);
+    } finally {
+      setUpdatingPolicy(false);
     }
   };
 
@@ -769,6 +1007,116 @@ export default function PolicyExplorer() {
                   )}
                 </div>
               </div>
+
+              {selectedAgentOwned ? (
+                <div className="card" style={{ marginTop: 20, marginBottom: 0 }}>
+                  <div className="card-header">
+                    <div>
+                      <h2>Policy update</h2>
+                      <p>Publish updated policy constraints. This creates a new policy CID on IPFS and refreshes the ENS policy pointer.</p>
+                    </div>
+                  </div>
+
+                  <label className="form-label" htmlFor="policy-constraints-json">Policy constraints JSON</label>
+                  {loadingPolicyDraft ? (
+                    <p>Loading current policy constraints...</p>
+                  ) : (
+                    <textarea
+                      id="policy-constraints-json"
+                      className="form-input"
+                      value={policyConstraintsDraft}
+                      onChange={(event) => setPolicyConstraintsDraft(event.target.value)}
+                      rows={14}
+                      spellCheck={false}
+                      style={{ fontFamily: "var(--font-mono)", fontSize: "0.82rem", resize: "vertical" }}
+                    />
+                  )}
+
+                  <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 16 }}>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={publishPolicyUpdate}
+                      disabled={updatingPolicy || loadingPolicyDraft}
+                    >
+                      {updatingPolicy ? "Publishing..." : "Publish policy update"}
+                    </button>
+                    {policyUpdateResult?.policyGatewayUrl ? (
+                      <a href={policyUpdateResult.policyGatewayUrl} target="_blank" rel="noreferrer" className="btn btn-ghost">
+                        Open latest policy
+                      </a>
+                    ) : null}
+                  </div>
+
+                  {policyUpdateResult ? (
+                    <div style={{ marginTop: 16, display: "grid", gap: 10 }}>
+                      <div className="code-block">New Policy CID: {policyUpdateResult.policyCid}</div>
+                      <div className="code-block">New Policy URI: {policyUpdateResult.policyUri}</div>
+                      <div className="code-block">Policy Gateway URL: {policyUpdateResult.policyGatewayUrl || "Not available"}</div>
+                      <div className="code-block">ENS synced: {policyUpdateResult.ensSynced ? "yes" : "no"}</div>
+                      {policyUpdateResult.ensTxHash ? (
+                        <div className="code-block">ENS tx: {policyUpdateResult.ensTxHash}</div>
+                      ) : null}
+                      {policyUpdateResult.note ? (
+                        <div className="code-block">Note: {policyUpdateResult.note}</div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {selectedAgentOwned ? (
+                <div className="card" style={{ marginTop: 20, marginBottom: 0 }}>
+                  <div className="card-header">
+                    <div>
+                      <h2>Rules dDoc update</h2>
+                      <p>Publish an updated rules document. Each publish pins a new IPFS leaf and updates this agent record.</p>
+                    </div>
+                  </div>
+
+                  <label className="form-label" htmlFor="rules-doc-json">Rules dDoc JSON</label>
+                  <textarea
+                    id="rules-doc-json"
+                    className="form-input"
+                    value={rulesDocumentDraft}
+                    onChange={(event) => setRulesDocumentDraft(event.target.value)}
+                    rows={12}
+                    spellCheck={false}
+                    style={{ fontFamily: "var(--font-mono)", fontSize: "0.82rem", resize: "vertical" }}
+                  />
+
+                  <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 16 }}>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={publishRulesDocument}
+                      disabled={updatingRulesDocument}
+                    >
+                      {updatingRulesDocument ? "Publishing..." : "Publish rules update"}
+                    </button>
+                    {rulesUpdateResult?.gatewayUrl ? (
+                      <a href={rulesUpdateResult.gatewayUrl} target="_blank" rel="noreferrer" className="btn btn-ghost">
+                        Open latest rules dDoc
+                      </a>
+                    ) : null}
+                  </div>
+
+                  {rulesUpdateResult ? (
+                    <div style={{ marginTop: 16, display: "grid", gap: 10 }}>
+                      <div className="code-block">New CID: {rulesUpdateResult.cid}</div>
+                      <div className="code-block">IPFS URI: {rulesUpdateResult.ipfsUri}</div>
+                      <div className="code-block">Gateway URL: {rulesUpdateResult.gatewayUrl}</div>
+                      <div className="code-block">ENS synced: {rulesUpdateResult.ensSynced ? "yes" : "no"}</div>
+                      {rulesUpdateResult.ensTxHash ? (
+                        <div className="code-block">ENS tx: {rulesUpdateResult.ensTxHash}</div>
+                      ) : null}
+                      {rulesUpdateResult.note ? (
+                        <div className="code-block">Note: {rulesUpdateResult.note}</div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
 
               {selectedAgentOwned ? (
                 <div className="card" style={{ marginTop: 20, marginBottom: 0 }}>
