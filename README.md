@@ -65,6 +65,8 @@ npm run deploy  # Deploy VCRPolicyRegistry to Sepolia
 | `/api/register` | POST | Register agent on ERC-8004 |
 | `/api/register/:agentId` | GET | Agent owner + reputation |
 | `/api/register/owner/:address` | GET | Agents by owner |
+| `/api/register/:agentId/policy` | PUT | Owner-signed policy update (new IPFS CID + ENS pointer + refreshed rules dDoc snapshot) |
+| `/api/register/:agentId/rules` | PUT | Owner-signed rules dDoc update (new IPFS leaf) |
 | `/api/wallet` | POST | Create BitGo wallet |
 | `/api/wallet/:id` | GET | Wallet details |
 | `/api/wallet/:id/policy` | GET/PUT | Wallet policy |

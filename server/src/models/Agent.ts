@@ -135,12 +135,29 @@ export async function updateAgentProfile(
 
 export async function updateAgentPolicy(
     agentId: number,
-    policyUri: string,
-    policyCid: string
+    policy: {
+        policyUri: string;
+        policyCid: string;
+        supportedTokens?: string[];
+        supportedChains?: string[];
+    }
 ): Promise<IAgent | null> {
+    const updates: Record<string, unknown> = {
+        policyUri: policy.policyUri,
+        policyCid: policy.policyCid,
+    };
+
+    if (Array.isArray(policy.supportedTokens) && policy.supportedTokens.length > 0) {
+        updates.supportedTokens = policy.supportedTokens;
+    }
+
+    if (Array.isArray(policy.supportedChains) && policy.supportedChains.length > 0) {
+        updates.supportedChains = policy.supportedChains;
+    }
+
     return Agent.findOneAndUpdate(
         { agentId },
-        { $set: { policyUri, policyCid } },
+        { $set: updates },
         { new: true }
     );
 }
