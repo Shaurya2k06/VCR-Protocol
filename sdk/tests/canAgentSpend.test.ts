@@ -332,6 +332,56 @@ describe("canAgentSpendWithPolicy — token allowlist", () => {
   });
 });
 
+// ─── Slippage protection ─────────────────────────────────────────────────────
+
+describe("canAgentSpendWithPolicy — slippage protection", () => {
+  it("allows when slippage is within the configured threshold", () => {
+    const policy = makePolicy({
+      constraints: baseConstraints({
+        slippageProtection: { enabled: true, maxSlippageBps: 100 },
+      }),
+    });
+
+    const result = canAgentSpendWithPolicy(
+      policy,
+      makeRequest({ slippageBps: 42 }),
+      "0",
+    );
+
+    expect(result.allowed).toBe(true);
+  });
+
+  it("blocks when slippage exceeds the configured threshold", () => {
+    const policy = makePolicy({
+      constraints: baseConstraints({
+        slippageProtection: { enabled: true, maxSlippageBps: 100 },
+      }),
+    });
+
+    const result = canAgentSpendWithPolicy(
+      policy,
+      makeRequest({ slippageBps: 8700 }),
+      "0",
+    );
+
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toMatch(/slippage/i);
+  });
+
+  it("blocks when slippage protection is enabled but no estimate is provided", () => {
+    const policy = makePolicy({
+      constraints: baseConstraints({
+        slippageProtection: { enabled: true, maxSlippageBps: 50 },
+      }),
+    });
+
+    const result = canAgentSpendWithPolicy(policy, makeRequest(), "0");
+
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toMatch(/slippage estimate/i);
+  });
+});
+
 // ─── Chain allowlist ──────────────────────────────────────────────────────────
 
 describe("canAgentSpendWithPolicy — chain allowlist", () => {

@@ -19,17 +19,46 @@ import type { BitGoWalletResult, BitGoPolicy } from "./types.js";
 
 // ─── Client Factory ───────────────────────────────────────────────────────────
 
-function getBitGo(): BitGoAPI {
+export function getBitGoClient(): BitGoAPI {
   const accessToken = process.env.BITGO_ACCESS_TOKEN;
   if (!accessToken) throw new Error("BITGO_ACCESS_TOKEN not set");
+  const customRootURI =
+    process.env.BITGO_CUSTOM_ROOT_URI ?? process.env.BITGO_EXPRESS_URL;
 
-  const bitgo = new BitGoAPI({ env: "test" });
+  const bitgo = new BitGoAPI({
+    env: "test",
+    ...(customRootURI ? { customRootURI } : {}),
+  });
   // @ts-ignore - BitGo's package typings can drift across releases.
   bitgo.register("eth", Eth.createInstance);
   // @ts-ignore - BitGo's package typings can drift across releases.
   bitgo.register("hteth", Eth.createInstance); // Hoodi testnet (chain ID 560048)
   bitgo.authenticateWithAccessToken({ accessToken });
   return bitgo;
+}
+
+function getBitGo(): BitGoAPI {
+  return getBitGoClient();
+}
+
+export async function unlockBitGoSession(
+  duration: number = 3600,
+): Promise<unknown> {
+  const bitgo = getBitGoClient() as any;
+  const otp = process.env.BITGO_OTP ?? "0000000";
+
+  const username = process.env.BITGO_USERNAME;
+  const password = process.env.BITGO_PASSWORD;
+
+  if (username && password && typeof bitgo.authenticate === "function") {
+    await bitgo.authenticate({ username, password, otp });
+  }
+
+  if (typeof bitgo.unlock !== "function") {
+    throw new Error("BitGo SDK client does not expose unlock()");
+  }
+
+  return bitgo.unlock({ otp, duration });
 }
 
 // ─── Wallet Creation ──────────────────────────────────────────────────────────
@@ -307,6 +336,47 @@ export async function sendTransaction(
     );
 
   const wallet = await getWallet(walletId);
+  const rawWallet = (wallet as any)?._wallet ?? {};
+  const isTssWallet =
+    rawWallet.multisigType === "tss" ||
+    (typeof (wallet as any).multisigType === "function" &&
+      (wallet as any).multisigType() === "tss");
+
+  if (isTssWallet) {
+    const prebuild = await (wallet as any).prebuildTransaction({
+      type: "transfer",
+      recipients: [{ address: recipientAddress, amount: amountWei }],
+      walletPassphrase,
+      apiVersion: "full",
+    });
+
+    const signed = await (wallet as any).signTransaction({
+      txPrebuild: prebuild,
+      walletPassphrase,
+      apiVersion: "full",
+    });
+
+    const txid = signed?.transactions?.[0]?.signedTx?.id;
+    const pendingApproval =
+      signed?.pendingApprovalId ??
+      signed?.pendingApproval?.id;
+    const state = signed?.state ?? signed?.transactions?.[0]?.state;
+
+    if (txid) {
+      return { txid, status: "confirmed" };
+    }
+    if (pendingApproval || state === "pendingApproval") {
+      return {
+        pendingApproval:
+          typeof pendingApproval === "string" ? pendingApproval : undefined,
+        status: "pending_approval",
+      };
+    }
+
+    throw new Error(
+      `BitGo TSS transfer completed without txid or pending approval (state: ${String(state ?? "unknown")})`,
+    );
+  }
 
   const result = (await (wallet as any).sendMany({
     recipients: [{ address: recipientAddress, amount: amountWei }],

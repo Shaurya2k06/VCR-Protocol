@@ -59,6 +59,9 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "demo": "tsx scripts/demo.ts",
+    "check:x402": "tsx scripts/check-x402-micropayment.ts",
+    "check:bitgo-send": "tsx scripts/check-bitgo-send.ts",
+    "inspect:wallet": "tsx scripts/inspect-bitgo-wallet.ts",
     "setup": "tsx scripts/setup-agent.ts",
     "update-policy": "tsx scripts/update-policy.ts",
     "register-ens": "tsx scripts/register-ens.ts"
