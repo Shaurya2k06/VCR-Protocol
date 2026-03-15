@@ -16,8 +16,10 @@ const app = express();
 const PORT = parseInt(process.env.PORT ?? "3001");
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
-
-app.use(cors());
+const corsOptions = {
+  origin: "*",
+}
+app.use(cors(corsOptions));
 app.use(express.json({ limit: "10mb" }));
 
 // Request logger (dev)
