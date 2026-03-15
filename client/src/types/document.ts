@@ -1,1 +1,1 @@
-export type { StoredDoc } from "./doc";
+export type { StoredDoc, DocumentVersion } from "./doc";

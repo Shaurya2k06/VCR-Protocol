@@ -67,6 +67,9 @@ npm run deploy  # Deploy VCRPolicyRegistry to Sepolia
 | `/api/register/owner/:address` | GET | Agents by owner |
 | `/api/register/:agentId/policy` | PUT | Owner-signed policy update (new IPFS CID + ENS pointer + refreshed rules dDoc snapshot) |
 | `/api/register/:agentId/rules` | PUT | Owner-signed rules dDoc update (new IPFS leaf) |
+| `/api/documents` | POST | Create a versioned dDoc record (initial CID) |
+| `/api/documents/:id/version` | POST | Append a new CID version + set as current |
+| `/api/documents/:id/restore` | POST | Restore an older CID as current |
 | `/api/wallet` | POST | Create BitGo wallet |
 | `/api/wallet/:id` | GET | Wallet details |
 | `/api/wallet/:id/policy` | GET/PUT | Wallet policy |

@@ -6,6 +6,8 @@ import PaywallDemo from "./components/pages/PaywallDemo";
 import PolicyExplorer from "./components/pages/PolicyExplorer";
 import CreateAgentDoc from "./pages/CreateAgentDoc";
 import ViewAgentDoc from "./pages/ViewAgentDoc";
+import ViewDocPage from "./pages/ViewDocPage";
+import EditDocPage from "./pages/EditDocPage";
 
 export default function App() {
   return (
@@ -18,6 +20,8 @@ export default function App() {
         <Route path="/explorer" element={<PolicyExplorer />} />
         <Route path="/doc/create" element={<CreateAgentDoc />} />
         <Route path="/doc/create-agent" element={<CreateAgentDoc />} />
+        <Route path="/doc/id/:id" element={<ViewDocPage />} />
+        <Route path="/doc/edit/:id" element={<EditDocPage />} />
         <Route path="/doc/:cid" element={<ViewAgentDoc />} />
       </Routes>
     </BrowserRouter>

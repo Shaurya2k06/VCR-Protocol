@@ -49,12 +49,17 @@ export default function CreateAgentDoc() {
 
       const cid = await uploadDocToIPFS(docJSON);
 
-      await createStoredDocument({
+      const stored = await createStoredDocument({
         title: agentData.name.trim(),
         cid,
+        author: "creator",
       });
 
-      navigate(`/doc/${cid}`);
+      if (stored._id) {
+        navigate(`/doc/id/${stored._id}`);
+      } else {
+        navigate(`/doc/${cid}`);
+      }
     } catch (submitError) {
       setError((submitError as Error).message || "Failed to create agent document");
     } finally {

@@ -43,6 +43,11 @@ import {
   updateAgentProfile,
   updateAgentRulesDocument,
 } from "../models/Agent.js";
+import {
+  appendStoredDocumentVersion,
+  getStoredDocumentByCid,
+  saveStoredDocument,
+} from "../models/Document.js";
 import { getAddress, recoverMessageAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
@@ -520,6 +525,76 @@ function resolveRulesDocumentFields(params: {
     rulesDocumentUrl,
     rulesDocumentRaw,
     rulesDocumentSource: getRulesDocumentSource(rulesDocumentUrl, rulesDocumentRaw),
+  };
+}
+
+async function upsertRulesDocumentHistory(params: {
+  ensName: string;
+  previousRulesDocumentUrl?: string;
+  nextRulesDocumentCid: string;
+  author?: string;
+}): Promise<{
+  documentId: string;
+  versionCount: number;
+  currentCID: string;
+}> {
+  const nextCid = extractIpfsCid(params.nextRulesDocumentCid);
+  if (!nextCid) {
+    throw new Error("Unable to resolve CID for rules document history update");
+  }
+
+  const previousCid =
+    extractIpfsCid(params.previousRulesDocumentUrl) ?? undefined;
+
+  const historyTitle = `${params.ensName} policy snapshot`;
+  const author = toOptionalString(params.author) ?? "system";
+
+  let stored =
+    (previousCid ? await getStoredDocumentByCid(previousCid) : null) ??
+    (await getStoredDocumentByCid(nextCid));
+
+  if (!stored) {
+    if (previousCid && previousCid !== nextCid) {
+      const seeded = await saveStoredDocument({
+        title: historyTitle,
+        cid: previousCid,
+        author,
+      });
+
+      const appended = await appendStoredDocumentVersion(String(seeded._id), {
+        cid: nextCid,
+        author,
+      });
+
+      return {
+        documentId: String(appended._id),
+        versionCount: appended.versions.length,
+        currentCID: appended.currentCID,
+      };
+    }
+
+    const created = await saveStoredDocument({
+      title: historyTitle,
+      cid: nextCid,
+      author,
+    });
+
+    return {
+      documentId: String(created._id),
+      versionCount: created.versions.length,
+      currentCID: created.currentCID,
+    };
+  }
+
+  const updated = await appendStoredDocumentVersion(String(stored._id), {
+    cid: nextCid,
+    author,
+  });
+
+  return {
+    documentId: String(updated._id),
+    versionCount: updated.versions.length,
+    currentCID: updated.currentCID,
   };
 }
 
@@ -1268,6 +1343,12 @@ router.put("/:agentId/policy", async (req, res) => {
     const rulesSnapshotDdoc = buildPolicyRulesSnapshotDdoc(policy, agent.ensName);
     const uploadedRulesSnapshot = await uploadRulesDocumentJson(rulesSnapshotDdoc);
     const rulesSnapshotRaw = JSON.stringify(rulesSnapshotDdoc, null, 2);
+    const rulesHistory = await upsertRulesDocumentHistory({
+      ensName: agent.ensName,
+      previousRulesDocumentUrl: agent.rulesDocumentUrl ?? agent.policyUri,
+      nextRulesDocumentCid: uploadedRulesSnapshot.cid,
+      author: normalizedActor,
+    });
 
     const shouldSyncEns = syncEns !== false;
     const isSelfOwned = agent.registrationMode === "self-owned";
@@ -1313,6 +1394,8 @@ router.put("/:agentId/policy", async (req, res) => {
       rulesDocumentCid: uploadedRulesSnapshot.cid,
       rulesDocumentIpfsUri: uploadedRulesSnapshot.ipfsUri,
       rulesDocumentGatewayUrl: uploadedRulesSnapshot.gatewayUrl,
+      rulesDocumentHistoryId: rulesHistory.documentId,
+      rulesDocumentVersionCount: rulesHistory.versionCount,
       ensSynced,
       ensPolicyTxHash,
       ensRulesTxHash,
@@ -1387,6 +1470,12 @@ router.put("/:agentId/rules", async (req, res) => {
     const uploadedRules = await uploadRulesDocumentJson(rulesDocumentJson);
     const rawSnapshot =
       toOptionalString(rulesDocumentRaw) ?? JSON.stringify(rulesDocumentJson, null, 2);
+    const rulesHistory = await upsertRulesDocumentHistory({
+      ensName: agent.ensName,
+      previousRulesDocumentUrl: agent.rulesDocumentUrl ?? agent.policyUri,
+      nextRulesDocumentCid: uploadedRules.cid,
+      author: normalizedActor,
+    });
 
     let ensTxHash: string | undefined;
     let ensSynced = false;
@@ -1412,6 +1501,8 @@ router.put("/:agentId/rules", async (req, res) => {
       cid: uploadedRules.cid,
       ipfsUri: uploadedRules.ipfsUri,
       gatewayUrl: uploadedRules.gatewayUrl,
+      rulesDocumentHistoryId: rulesHistory.documentId,
+      rulesDocumentVersionCount: rulesHistory.versionCount,
       ensTextRecord: "vcr.rules",
       ensSynced,
       ensTxHash,
