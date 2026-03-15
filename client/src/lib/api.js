@@ -132,10 +132,30 @@ export const vcr = {
       method: "POST",
       body,
     }),
+  checkDemoRequest: (body) =>
+    api("/api/demo/check", {
+      method: "POST",
+      body,
+    }),
+  settleDemoRequest: (body) =>
+    api("/api/demo/settle", {
+      method: "POST",
+      body,
+    }),
+  getFeaturedDemoAgent: () => api("/api/demo/featured-agent"),
+  getIncidentDemos: (ensName) =>
+    api(`/api/demo/incidents/${encodeURIComponent(ensName)}`),
   getDemoDaily: (ensName, token) =>
     api(
       `/api/demo/daily/${encodeURIComponent(ensName)}/${encodeURIComponent(token)}`,
     ),
+  resetDemoDaily: (ensName, token) =>
+    api(
+      `/api/demo/daily/${encodeURIComponent(ensName)}/${encodeURIComponent(token)}/reset`,
+      { method: "POST" },
+    ),
+  getDemoLogs: (ensName) =>
+    api(`/api/demo/logs/${encodeURIComponent(ensName)}`),
 
   // Raw paywall helpers
   getPaywallContent: (headers = {}) =>

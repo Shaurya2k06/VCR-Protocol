@@ -102,3 +102,26 @@ export async function getSpendHistory(
     .sort({ date: -1 })
     .limit(limit);
 }
+
+/**
+ * Reset today's cumulative spend for an agent/token back to zero.
+ * Useful for deterministic demo reruns.
+ */
+export async function resetDailySpend(
+  ensName: string,
+  token: string,
+): Promise<IDailySpend> {
+  const filter = {
+    ensName: ensName.toLowerCase(),
+    token: token.toUpperCase(),
+    date: todayUTC(),
+  };
+
+  const doc = await DailySpend.findOneAndUpdate(
+    filter,
+    { $set: { amountSpent: "0" } },
+    { new: true, upsert: true },
+  );
+
+  return doc;
+}
