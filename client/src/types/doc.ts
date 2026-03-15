@@ -1,9 +1,17 @@
 export interface StoredDoc {
   _id?: string;
   title: string;
-  cid: string;
+  currentCID: string;
+  cid?: string;
+  versions: DocumentVersion[];
   createdAt?: string;
   updatedAt?: string;
+}
+
+export interface DocumentVersion {
+  cid: string;
+  timestamp: string;
+  author?: string;
 }
 
 export interface AgentDocInput {
