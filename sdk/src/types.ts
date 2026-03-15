@@ -8,6 +8,12 @@ export interface TimeRestrictions {
   allowedHours: [number, number];
 }
 
+export interface SlippageProtection {
+  enabled: boolean;
+  /** Maximum tolerated slippage in basis points. 100 = 1% */
+  maxSlippageBps: number;
+}
+
 export interface TokenAmount {
   /** Amount in base units as string (USDC uses 6 decimals) */
   amount: string;
@@ -29,6 +35,8 @@ export interface VCRConstraints {
   allowedChains: string[];
   /** Optional time-of-day restriction */
   timeRestrictions?: TimeRestrictions;
+  /** Optional slippage guard for DEX or route-based transactions */
+  slippageProtection?: SlippageProtection;
 }
 
 /** Alias kept for backward compatibility */
@@ -91,6 +99,8 @@ export interface SpendRequest {
   recipient: string;
   /** Chain identifier, e.g. "base-sepolia" */
   chain: string;
+  /** Optional observed or quoted slippage in basis points */
+  slippageBps?: number;
 }
 
 export interface SpendResult {
