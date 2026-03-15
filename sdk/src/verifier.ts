@@ -114,7 +114,28 @@ export async function canAgentSpend(
     };
   }
 
-  // ── 8. Time-of-day restriction ──────────────────────────────────────────────
+  // ── 8. Slippage restriction ─────────────────────────────────────────────────
+  if (policy.constraints.slippageProtection?.enabled) {
+    if (typeof req.slippageBps !== "number" || Number.isNaN(req.slippageBps)) {
+      return {
+        allowed: false,
+        reason: "Slippage estimate is required for this policy",
+        policy,
+        policyCid,
+      };
+    }
+
+    if (req.slippageBps > policy.constraints.slippageProtection.maxSlippageBps) {
+      return {
+        allowed: false,
+        reason: `Slippage ${req.slippageBps} bps exceeds max allowed ${policy.constraints.slippageProtection.maxSlippageBps} bps`,
+        policy,
+        policyCid,
+      };
+    }
+  }
+
+  // ── 9. Time-of-day restriction ──────────────────────────────────────────────
   if (policy.constraints.timeRestrictions) {
     const [start, end] = policy.constraints.timeRestrictions.allowedHours;
     const utcHour = new Date().getUTCHours();
@@ -128,7 +149,7 @@ export async function canAgentSpend(
     }
   }
 
-  // ── 9. Daily cumulative limit ───────────────────────────────────────────────
+  // ── 10. Daily cumulative limit ──────────────────────────────────────────────
   let dailySpent: string;
   try {
     dailySpent = await getDailySpent(ensName, req.token);
@@ -215,6 +236,24 @@ export function canAgentSpendWithPolicy(
       reason: `Chain ${req.chain} is not allowed. Allowed: ${policy.constraints.allowedChains.join(", ")}`,
       policy,
     };
+  }
+
+  if (policy.constraints.slippageProtection?.enabled) {
+    if (typeof req.slippageBps !== "number" || Number.isNaN(req.slippageBps)) {
+      return {
+        allowed: false,
+        reason: "Slippage estimate is required for this policy",
+        policy,
+      };
+    }
+
+    if (req.slippageBps > policy.constraints.slippageProtection.maxSlippageBps) {
+      return {
+        allowed: false,
+        reason: `Slippage ${req.slippageBps} bps exceeds max allowed ${policy.constraints.slippageProtection.maxSlippageBps} bps`,
+        policy,
+      };
+    }
   }
 
   if (policy.constraints.timeRestrictions) {
