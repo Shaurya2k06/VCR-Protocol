@@ -6,7 +6,7 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "node ./node_modules/typescript/bin/tsc -p tsconfig.json",
+    "build": "node --max-old-space-size=4096 ./node_modules/typescript/bin/tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "prestart": "npm run build",
     "clean": "rm -rf dist",
@@ -21,7 +21,7 @@
   "dependencies": {
     "@helia/json": "latest",
     "@helia/unixfs": "^5.0.0",
-    "@vcr-protocol/sdk": "file:../sdk",
+    "@vcr-protocol/sdk": "npm:@shaurya2k06/vcrsdk@^1.1.0",
     "cors": "^2.8.5",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
