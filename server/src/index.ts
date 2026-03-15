@@ -19,7 +19,7 @@ const PORT = parseInt(process.env.PORT ?? "3001");
 const corsOptions = {
   origin: "*",
 }
-app.use(cors(corsOptions));
+app.use(cors());
 app.use(express.json({ limit: "10mb" }));
 
 // Request logger (dev)
