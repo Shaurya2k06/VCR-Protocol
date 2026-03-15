@@ -76,6 +76,15 @@ function logCreateAgentDetail(message: string, logger?: (message: string) => voi
   emitCreateAgentLog(`  ${message}`, logger);
 }
 
+function resolveTokenDecimals(token: string): number {
+  const normalized = token.toLowerCase();
+  if (normalized === "usdc" || normalized === "usdt") {
+    return 6;
+  }
+
+  return 18;
+}
+
 async function withCreateAgentProgressLog<T>(
   message: string,
   promise: Promise<T>,
@@ -203,6 +212,7 @@ export async function createAgent(
   const allowedChains  = config.allowedChains  ?? ["base-sepolia"];
   const allowedTokens  = config.allowedTokens  ?? ["USDC"];
   const primaryChain   = allowedChains[0]!;
+  const primaryToken   = allowedTokens[0]!;
 
   // ── Step 2: Register on ERC-8004 ─────────────────────────────────────────
   emitCreateAgentLog("[2/5] Registering ERC-8004 agent NFT on Sepolia", options?.logger);
@@ -234,22 +244,22 @@ export async function createAgent(
   // ── Step 3: Build the final policy document ───────────────────────────────
   emitCreateAgentLog("[3/5] Building final VCR policy document", options?.logger);
 
-  // USDC amounts use 6 decimals
-  const maxTxUsdc   = parseUnits(config.maxPerTxUsdc,   6).toString();
-  const dailyUsdc   = parseUnits(config.dailyLimitUsdc, 6).toString();
+  const policyTokenDecimals = resolveTokenDecimals(primaryToken);
+  const maxTxAmount = parseUnits(config.maxPerTxUsdc, policyTokenDecimals).toString();
+  const dailyAmount = parseUnits(config.dailyLimitUsdc, policyTokenDecimals).toString();
 
   const finalPolicy: VCRPolicy = {
     version:   "1.0",
     agentId:  `eip155:11155111:${ERC8004_ADDRESSES.identityRegistry.sepolia}:${agentId}`,
     constraints: {
       maxTransaction: {
-        amount: maxTxUsdc,
-        token:  "USDC",
+        amount: maxTxAmount,
+        token:  primaryToken,
         chain:  primaryChain,
       },
       dailyLimit: {
-        amount: dailyUsdc,
-        token:  "USDC",
+        amount: dailyAmount,
+        token:  primaryToken,
         chain:  primaryChain,
       },
       allowedRecipients: config.allowedRecipients,

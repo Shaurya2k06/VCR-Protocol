@@ -37,17 +37,17 @@ describe("buildProtocolSuite", () => {
       },
     );
 
-    expect(suite.scenarios.length).toBeGreaterThanOrEqual(5);
+    expect(suite.scenarios.length).toBe(5);
     expect(suite.scenarios.some((scenario) => scenario.expectedAllowed)).toBe(true);
     expect(suite.scenarios.some((scenario) => scenario.expectedAllowed === false)).toBe(true);
     expect(suite.scenarios.find((scenario) => scenario.id === "allowed-micropayment")?.actualAllowed).toBe(true);
+    expect(suite.scenarios.find((scenario) => scenario.id === "allowed-second-recipient")?.actualAllowed).toBe(true);
     expect(suite.scenarios.find((scenario) => scenario.id === "blocked-recipient")?.actualAllowed).toBe(false);
-    expect(suite.scenarios.find((scenario) => scenario.id === "blocked-token")?.actualAllowed).toBe(false);
-    expect(suite.scenarios.find((scenario) => scenario.id === "blocked-chain")?.actualAllowed).toBe(false);
-    expect(suite.scenarios.find((scenario) => scenario.id === "blocked-max-transaction")?.actualAllowed).toBe(false);
+    expect(suite.scenarios.find((scenario) => scenario.id === "blocked-over-limit")?.actualAllowed).toBe(false);
+    expect(suite.scenarios.find((scenario) => scenario.id === "blocked-daily-limit")?.actualAllowed).toBe(false);
   });
 
-  it("includes a simulated daily limit failure when an allowed payment can be constructed", () => {
+  it("keeps the suite focused to two allowed paths and three blocked paths", () => {
     const suite = buildProtocolSuite(
       "researcher.vcrtcorp.eth",
       makePolicy(),
@@ -60,9 +60,35 @@ describe("buildProtocolSuite", () => {
       },
     );
 
-    const dailyScenario = suite.scenarios.find((scenario) => scenario.id === "blocked-daily-limit");
-    expect(dailyScenario).toBeDefined();
-    expect(dailyScenario?.simulated).toBe(true);
-    expect(dailyScenario?.actualAllowed).toBe(false);
+    expect(suite.scenarios.map((scenario) => scenario.id)).toEqual([
+      "allowed-micropayment",
+      "allowed-second-recipient",
+      "blocked-recipient",
+      "blocked-over-limit",
+      "blocked-daily-limit",
+    ]);
+  });
+
+  it("normalizes time restrictions for the demo suite so the happy path still shows", () => {
+    const suite = buildProtocolSuite(
+      "researcher.vcrtcorp.eth",
+      {
+        ...makePolicy(),
+        constraints: {
+          ...makePolicy().constraints,
+          timeRestrictions: { timezone: "UTC", allowedHours: [9, 17] },
+        },
+      },
+      "0",
+      {
+        amount: "100000",
+        token: "USDC",
+        recipient: "0x1234567890123456789012345678901234567890",
+        network: "base-sepolia",
+      },
+    );
+
+    expect(suite.demoAdjustedTimeWindow).toBe(true);
+    expect(suite.scenarios.find((scenario) => scenario.id === "allowed-micropayment")?.actualAllowed).toBe(true);
   });
 });

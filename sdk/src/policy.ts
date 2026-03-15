@@ -33,6 +33,11 @@ export function validatePolicy(policy: VCRPolicy): void {
     }
     if (start >= end) throw new Error("allowedHours start must be before end");
   }
+  if (c.slippageProtection) {
+    if (c.slippageProtection.maxSlippageBps < 0) {
+      throw new Error("maxSlippageBps must be 0 or greater");
+    }
+  }
 }
 
 // ─── Policy Factory ───────────────────────────────────────────────────────────
