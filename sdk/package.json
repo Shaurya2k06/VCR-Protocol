@@ -1,5 +1,5 @@
 {
-  "name": "@shaurya2k06/vcrsdk",
+  "name": "@soundcodes/vcrsdk-2",
   "version": "1.1.0",
   "description": "VCR Protocol SDK — Policy-bound autonomous agent wallets with on-chain verification, ENS integration, x402 payments, and BitGo enforcement.",
   "type": "module",
