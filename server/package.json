@@ -6,7 +6,8 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "node ./node_modules/typescript/bin/tsc -p tsconfig.json",
+    "prebuild": "npm --prefix ../sdk install --legacy-peer-deps && npm --prefix ../sdk run build",
+    "build": "node --max-old-space-size=4096 ./node_modules/typescript/bin/tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "prestart": "npm run build",
     "clean": "rm -rf dist",
@@ -21,7 +22,11 @@
   "dependencies": {
     "@helia/json": "latest",
     "@helia/unixfs": "^5.0.0",
+<<<<<<< HEAD
     "@soundcodes/vcrsdk-2": "^1.1.0",
+=======
+    "@vcr-protocol/sdk": "file:../sdk",
+>>>>>>> 89fe9379bd7e876b5699f32c7fb4f2c31e6ac58e
     "cors": "^2.8.5",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
