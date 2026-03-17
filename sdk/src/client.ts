@@ -18,6 +18,53 @@ export function getEOAWalletClient() {
   });
 }
 
+/**
+ * Create a Pimlico paymaster client for Hoodi testnet (chain 560048).
+ * Used as fallback when BitGo enterprise gas tank is depleted.
+ *
+ * @param pimlicoApiKey - Pimlico API key for Hoodi testnet
+ * @returns Pimlico client configured for Hoodi
+ *
+ * @throws Error if pimlicoApiKey is not provided
+ * @throws Error if permissionless library is not installed
+ */
+export async function createHoodiPaymasterClient(pimlicoApiKey: string) {
+  if (!pimlicoApiKey) {
+    throw new Error(
+      "Pimlico API key is required to create Hoodi paymaster client",
+    );
+  }
+
+  try {
+    // Dynamic import — permissionless is required for paymaster clients
+    const { createPimlicoClient } = await import(
+      "permissionless/clients/pimlico"
+    );
+
+    const pimlicoUrl = `https://api.pimlico.io/v2/hoodi/rpc?apikey=${pimlicoApiKey}`;
+
+    const pimlicoClient = createPimlicoClient({
+      transport: http(pimlicoUrl),
+      entryPoint: {
+        address: "0x0000000071727De22E5E9d8BAf0edAc6f37da032", // ERC-4337 v0.7 EntryPoint
+        version: "0.7",
+      },
+    });
+
+    return pimlicoClient;
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message.includes("Cannot find module")
+    ) {
+      throw new Error(
+        "permissionless library is required for Hoodi paymaster support. Install via: npm install permissionless",
+      );
+    }
+    throw error;
+  }
+}
+
 export async function getWalletClient() {
   const rpcUrl = process.env.SEPOLIA_RPC_URL;
   const privateKey = process.env.PRIVATE_KEY as `0x${string}`;
@@ -81,6 +128,6 @@ export async function getWalletClient() {
     }
   }
 
-  // Fallback to regular EOA 
+  // Fallback to regular EOA
   return getEOAWalletClient();
 }

@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_URL || "https://vcr-backend.onrender.com";
+const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:3001";
 
 async function api(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {

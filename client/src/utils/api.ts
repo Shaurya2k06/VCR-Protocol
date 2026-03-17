@@ -1,6 +1,6 @@
 import type { DocumentVersion, StoredDoc } from "../types/document";
 
-export const API_BASE = import.meta.env.VITE_API_URL || "https://vcr-backend.onrender.com";
+export const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:3001";
 
 async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
