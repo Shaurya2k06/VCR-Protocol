@@ -6,6 +6,7 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "prebuild": "npm install --no-audit --no-fund",
     "build": "node --max-old-space-size=4096 ./node_modules/typescript/bin/tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "prestart": "npm run build",
