@@ -72,15 +72,15 @@ async function start() {
   console.log("✅ MongoDB connected");
 
   app.listen(PORT, () => {
-    console.log(`\n🔐 VCR Protocol API running at http://localhost:${PORT}`);
-    console.log(`   Health: http://localhost:${PORT}/api/health`);
-    console.log(`   Policy: http://localhost:${PORT}/api/policy`);
-    console.log(`   Verify: http://localhost:${PORT}/api/verify`);
-    console.log(`   Register: http://localhost:${PORT}/api/register`);
-    console.log(`   Demo: http://localhost:${PORT}/api/demo`);
-    console.log(`   Wallet: http://localhost:${PORT}/api/wallet\n`);
-    console.log(`   IPFS: http://localhost:${PORT}/api/ipfs`);
-    console.log(`   Documents: http://localhost:${PORT}/api/documents\n`);
+    console.log(`\n🔐 VCR Protocol API running at https://vcr-protocol-ylgy.onrender.com`);
+    console.log(`   Health: https://vcr-protocol-ylgy.onrender.com/api/health`);
+    console.log(`   Policy: https://vcr-protocol-ylgy.onrender.com/api/policy`);
+    console.log(`   Verify: https://vcr-protocol-ylgy.onrender.com/api/verify`);
+    console.log(`   Register: https://vcr-protocol-ylgy.onrender.com/api/register`);
+    console.log(`   Demo: https://vcr-protocol-ylgy.onrender.com/api/demo`);
+    console.log(`   Wallet: https://vcr-protocol-ylgy.onrender.com/api/wallet\n`);
+    console.log(`   IPFS: https://vcr-protocol-ylgy.onrender.com/api/ipfs`);
+    console.log(`   Documents: https://vcr-protocol-ylgy.onrender.com/api/documents\n`);
   });
 }
 
