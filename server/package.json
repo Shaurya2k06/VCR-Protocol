@@ -9,7 +9,6 @@
     "prebuild": "npm install --no-audit --no-fund",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
-    "prestart": "npm run build",
     "clean": "rm -rf dist",
     "lint": "eslint \"src/**/*.{ts,tsx}\" --fix",
     "test": "vitest run",
