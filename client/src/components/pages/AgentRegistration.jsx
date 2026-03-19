@@ -248,13 +248,24 @@ function normalizeBullMqJobResponse(response) {
   };
 }
 
-function stageLabel(stage) {
+function stageLabel(stage, logs) {
   if (!stage) {
     return "Provisioning in progress.";
   }
 
+  const hasFileverseLogs = (logs || []).some(
+    (log) => log && typeof log === "string" && log.includes("Fileverse")
+  );
+
   if (stage === "QUEUED") {
     return "Queued for worker pickup. Live logs will start shortly.";
+  }
+
+  if (stage === "RUNNING") {
+    if (hasFileverseLogs) {
+      return "Policy storage underway. Redirecting you now to explore the agent while pipeline finishes...";
+    }
+    return "Agent creation in progress.";
   }
 
   if (stage === "ENS_REGISTERED") {
@@ -912,13 +923,29 @@ export default function AgentRegistration() {
       return;
     }
 
+    // Check if fileverse policy storage has started appearing in logs
+    const hasFileverseLogs = (job.logs || []).some(
+      (log) => log && typeof log === "string" && log.includes("Fileverse")
+    ) || (job.lastLog && typeof job.lastLog === "string" && job.lastLog.includes("Fileverse"));
+
+    console.log("🔍 [Redirect Check]", {
+      jobId,
+      stage: job.stage,
+      hasFileverseLogs,
+      logsCount: (job.logs || []).length,
+      lastLog: job.lastLog?.substring(0, 80),
+    });
+
     const shouldRedirectToExplorer =
+      hasFileverseLogs ||
       job.stage === "ENS_REGISTERED" ||
       (job.stage === "COMPLETED" && Boolean(job.ensTxHash));
 
     if (!shouldRedirectToExplorer) {
       return;
     }
+
+    console.log("✅ [Redirect Triggered]", { stage: job.stage, hasFileverseLogs });
 
     const fallbackDomain =
       form.domainMode === "managed"
@@ -941,7 +968,9 @@ export default function AgentRegistration() {
       params.set("agentId", String(job.agentId));
     }
 
-    navigate(`/explorer?${params.toString()}`);
+    const redirectUrl = `/explorer?${params.toString()}`;
+    console.log("🚀 [Navigate to Explorer]", redirectUrl);
+    navigate(redirectUrl);
   }, [
     form.customDomain,
     form.domainMode,
@@ -2300,7 +2329,7 @@ export default function AgentRegistration() {
                 </div>
                 <div className="wizard-review-item wide">
                   <span>Worker status</span>
-                  <strong>{stageLabel(job?.stage)}</strong>
+                  <strong>{stageLabel(job?.stage, job?.logs)}</strong>
                 </div>
               </div>
 
