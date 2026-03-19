@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { vcr } from "../../lib/api";
 import { buildIpfsGatewayUrl, extractCidFromValue } from "../../utils/ipfs";
 
@@ -39,6 +39,10 @@ function toGatewayUrl(value = "") {
 
 function toReadableCid(value = "") {
   return extractCidFromValue(value) || "";
+}
+
+function isLoadingValue(value) {
+  return typeof value === "string" && value.trim().toLowerCase() === "loading";
 }
 
 function fileToDataUrl(file) {
@@ -81,9 +85,16 @@ function AgentCard({ agent, onSelect, owned }) {
   const headerImageUrl = toGatewayUrl(agent.headerUri || "");
   const avatarImageUrl = toGatewayUrl(agent.avatarUri || "");
   const rulesDocLink = toGatewayUrl(agent.rulesDocumentUrl || "");
-  const policyCid = agent.policyCid || toReadableCid(agent.policyUri || "") || "Not available";
-  const rulesDocCid = toReadableCid(agent.rulesDocumentUrl || "") || "Not available";
+  const policyCidRaw = agent.policyCid || toReadableCid(agent.policyUri || "") || "";
+  const policyCid = isLoadingValue(policyCidRaw)
+    ? "Loading..."
+    : policyCidRaw || "Not available";
+  const rulesDocCidRaw = toReadableCid(agent.rulesDocumentUrl || "") || agent.rulesDocumentUrl || "";
+  const rulesDocCid = isLoadingValue(rulesDocCidRaw)
+    ? "Loading..."
+    : rulesDocCidRaw || "Not available";
   const hasRulesDoc = Boolean(rulesDocLink || rulesDocCid !== "Not available");
+  const provisioning = agent.active === false;
 
   return (
     <button
@@ -163,6 +174,7 @@ function AgentCard({ agent, onSelect, owned }) {
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
             <span className="badge badge-blue">Agent #{agent.agentId}</span>
             {owned ? <span className="badge badge-purple">My agent</span> : null}
+            {provisioning ? <span className="badge badge-amber">Provisioning...</span> : null}
             {hasRulesDoc ? <span className="badge badge-gray">dDoc linked</span> : null}
           </div>
           <h2 style={{ fontSize: "1.25rem", marginBottom: 6 }}>{agent.ensName || agent.name}</h2>
@@ -192,6 +204,10 @@ function AgentCard({ agent, onSelect, owned }) {
 }
 
 export default function PolicyExplorer() {
+  const [searchParams] = useSearchParams();
+  const requestedTab = searchParams.get("tab");
+  const requestedEns = searchParams.get("ens");
+
   const [search, setSearch] = useState("");
   const [loadingLookup, setLoadingLookup] = useState(false);
   const [loadingAgents, setLoadingAgents] = useState(true);
@@ -199,10 +215,17 @@ export default function PolicyExplorer() {
   const [result, setResult] = useState(null);
   const [history, setHistory] = useState(null);
   const [error, setError] = useState("");
-  const [activeTab, setActiveTab] = useState("lookup");
+  const [activeTab, setActiveTab] = useState(() => {
+    if (requestedTab === "lookup" || requestedTab === "mine" || requestedTab === "all") {
+      return requestedTab;
+    }
+
+    return "lookup";
+  });
   const [wallet, setWallet] = useState({ address: "", status: "idle", error: "" });
   const [allAgents, setAllAgents] = useState([]);
   const [myAgents, setMyAgents] = useState([]);
+  const [ensAutoSelected, setEnsAutoSelected] = useState("");
   const [selectedAgent, setSelectedAgent] = useState(null);
   const [avatarFile, setAvatarFile] = useState(null);
   const [headerFile, setHeaderFile] = useState(null);
@@ -275,6 +298,12 @@ export default function PolicyExplorer() {
   }, []);
 
   useEffect(() => {
+    if (requestedTab === "lookup" || requestedTab === "mine" || requestedTab === "all") {
+      setActiveTab(requestedTab);
+    }
+  }, [requestedTab]);
+
+  useEffect(() => {
     const provider = getWalletProvider();
     if (!provider) {
       return undefined;
@@ -323,6 +352,54 @@ export default function PolicyExplorer() {
       setMyAgents([]);
     }
   }, [wallet.address]);
+
+  useEffect(() => {
+    if (!requestedEns || !allAgents.length) {
+      return;
+    }
+
+    const normalizedEns = requestedEns.trim().toLowerCase();
+    if (!normalizedEns || ensAutoSelected === normalizedEns) {
+      return;
+    }
+
+    const match = allAgents.find(
+      (agent) => agent?.ensName?.toLowerCase() === normalizedEns,
+    );
+
+    if (match) {
+      setSelectedAgent(match);
+      setActiveTab("all");
+      setEnsAutoSelected(normalizedEns);
+    }
+  }, [allAgents, ensAutoSelected, requestedEns]);
+
+  useEffect(() => {
+    if (!requestedEns) {
+      return;
+    }
+
+    const normalizedEns = requestedEns.trim().toLowerCase();
+    if (!normalizedEns) {
+      return;
+    }
+
+    const alreadyLoaded = allAgents.some(
+      (agent) => agent?.ensName?.toLowerCase() === normalizedEns,
+    );
+
+    if (alreadyLoaded) {
+      return;
+    }
+
+    const refreshTimer = window.setTimeout(() => {
+      void loadAllAgents();
+    }, 1500);
+
+    return () => {
+      window.clearTimeout(refreshTimer);
+    };
+  }, [allAgents, requestedEns]);
 
   const explore = async (e) => {
     e.preventDefault();

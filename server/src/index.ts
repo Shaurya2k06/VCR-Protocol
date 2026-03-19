@@ -11,6 +11,7 @@ import demoRouter from "./routes/demo.js";
 import walletRouter from "./routes/wallet.js";
 import ipfsRouter from "./routes/ipfsUpload.js";
 import documentsRouter from "./routes/documentRoutes.js";
+import createAgentRouter from "./api/createAgent.js";
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? "3001");
@@ -51,6 +52,7 @@ app.use("/api/demo", demoRouter);
 app.use("/api/wallet", walletRouter);
 app.use("/api/ipfs", ipfsRouter);
 app.use("/api/documents", documentsRouter);
+app.use(createAgentRouter);
 
 // ─── Global Error Handler ─────────────────────────────────────────────────────
 

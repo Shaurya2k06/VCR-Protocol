@@ -35,6 +35,12 @@ import {
   startAgentCreationJob,
 } from "../lib/agentCreationJobs.js";
 import {
+  enqueueRegisterAgentJob,
+  getRegisterAgentJob,
+  normalizeRegisterAgentProgress,
+} from "../queue/registerAgentQueue.js";
+import type { RegisterAgentJobProgress } from "../queue/types.js";
+import {
   getAgentByChainId,
   getAgentsByOwner,
   getAllAgents,
@@ -83,6 +89,12 @@ interface RulesDocumentOverrides {
   rulesDocumentUrl?: string;
   rulesDocumentRaw?: string;
 }
+
+const ENS_HANDOFF_WAIT_TIMEOUT_MS = Number.parseInt(
+  process.env.ENS_HANDOFF_WAIT_TIMEOUT_MS ?? "180000",
+  10,
+);
+const ENS_HANDOFF_POLL_MS = 1_500;
 
 function getMissingSimpleCreateEnv(): string[] {
   return SIMPLE_CREATE_REQUIRED_ENV.filter((key) => !process.env[key]);
@@ -676,6 +688,99 @@ async function persistCreatedAgent(
   } as any);
 }
 
+async function persistEnsHandoffPlaceholder(
+  config: NormalizedSimpleCreateRequest,
+  progress: RegisterAgentJobProgress | undefined,
+  overrides?: RulesDocumentOverrides,
+): Promise<void> {
+  if (!progress || progress.stage !== "ENS_REGISTERED") {
+    return;
+  }
+
+  const agentId = Number(progress.agentId);
+  const ensName = progress.ensName?.trim();
+
+  if (!Number.isFinite(agentId) || !ensName) {
+    return;
+  }
+
+  const existing = await getAgentByChainId(agentId);
+  if (existing?.active) {
+    return;
+  }
+
+  const signingAccount = getSigningAccount();
+  const rulesDocument = resolveRulesDocumentFields({
+    explicitUrl: overrides?.rulesDocumentUrl,
+    explicitRaw: overrides?.rulesDocumentRaw,
+    fallbackUrl: existing?.rulesDocumentUrl,
+    fallbackRaw: existing?.rulesDocumentRaw ?? buildSimpleRulesSnapshot(config),
+  });
+
+  await saveAgent({
+    agentId,
+    name: config.name,
+    description: existing?.description ?? "Loading... remaining setup is running in background workers.",
+    ownerAddress: signingAccount.address,
+    creatorAddress: config.creatorAddress,
+    registrationMode: config.domainMode,
+    agentWalletAddress: existing?.agentWalletAddress ?? "loading",
+    ensName,
+    agentUri: existing?.agentUri ?? "loading",
+    policyUri: existing?.policyUri ?? "loading",
+    rulesDocumentUrl: rulesDocument.rulesDocumentUrl ?? "loading",
+    rulesDocumentRaw: rulesDocument.rulesDocumentRaw ?? "loading",
+    rulesDocumentSource: rulesDocument.rulesDocumentSource ?? "inline",
+    policyCid: existing?.policyCid ?? "loading",
+    bitgoWalletId: existing?.bitgoWalletId ?? "loading",
+    registrationTxHash: progress.registrationTxHash ?? existing?.registrationTxHash ?? "loading",
+    active: false,
+    supportedChains: config.allowedChains ?? ["base-sepolia"],
+    supportedTokens: config.allowedTokens ?? ["USDC"],
+  } as any);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForEnsHandoffMilestone(jobId: string): Promise<RegisterAgentJobProgress | undefined> {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < ENS_HANDOFF_WAIT_TIMEOUT_MS) {
+    const queuedJob = await getRegisterAgentJob(jobId);
+    if (!queuedJob) {
+      throw new Error(`Queued register job ${jobId} was not found`);
+    }
+
+    const state = await queuedJob.getState();
+    const progress = normalizeRegisterAgentProgress(queuedJob.progress);
+
+    if (progress) {
+      const ensRegisteredWithAgentId =
+        progress.stage === "ENS_REGISTERED" && Number.isFinite(progress.agentId);
+      const selfOwnedHandoff = progress.stage === "ENS_DEFERRED_SELF_OWNED";
+      const completed = progress.stage === "COMPLETED";
+
+      if (ensRegisteredWithAgentId || selfOwnedHandoff || completed) {
+        return progress;
+      }
+    }
+
+    if (state === "failed") {
+      throw new Error(queuedJob.failedReason || "Register job failed before ENS handoff milestone");
+    }
+
+    if (state === "completed") {
+      return progress;
+    }
+
+    await delay(ENS_HANDOFF_POLL_MS);
+  }
+
+  return undefined;
+}
+
 async function runAgentCreationJob(
   jobId: string,
   config: NormalizedSimpleCreateRequest,
@@ -783,13 +888,30 @@ router.post("/jobs", async (req, res) => {
   }
 });
 
-router.get("/jobs/:jobId", (req, res) => {
-  const job = getAgentCreationJob(req.params.jobId);
-  if (!job) {
+router.get("/jobs/:jobId", async (req, res) => {
+  const legacyJob = getAgentCreationJob(req.params.jobId);
+  if (legacyJob) {
+    return res.json(legacyJob);
+  }
+
+  const queuedJob = await getRegisterAgentJob(req.params.jobId);
+  if (!queuedJob) {
     return res.status(404).json({ error: "Job not found" });
   }
 
-  return res.json(job);
+  const state = await queuedJob.getState();
+  const progress = normalizeRegisterAgentProgress(queuedJob.progress);
+
+  return res.json({
+    id: String(queuedJob.id),
+    source: "bullmq",
+    name: queuedJob.name,
+    state,
+    attemptsMade: queuedJob.attemptsMade,
+    failedReason: queuedJob.failedReason || undefined,
+    progress,
+    result: state === "completed" ? queuedJob.returnvalue : undefined,
+  });
 });
 
 router.get("/", async (_req, res) => {
@@ -832,25 +954,39 @@ router.post("/", async (req, res) => {
 
       const requestBody = req.body as SimpleCreateAgentRequest;
       const config = normalizeSimpleCreateConfig(requestBody);
-      const createSdkAgentWithOptionalLogger = createSdkAgent as unknown as (
-        config: CreateAgentConfig,
-        env: ReturnType<typeof getRegistrationRuntimeEnv>,
-        options?: {
-          logger?: (message: string) => void;
-          skipEnsBinding?: boolean;
-        },
-      ) => Promise<any>;
-      const record = await createSdkAgentWithOptionalLogger(config, getRegistrationRuntimeEnv(), {
-        skipEnsBinding: config.domainMode === "self-owned",
-      });
-      await persistCreatedAgent(config, record, {
+      const rulesDocumentOverrides: RulesDocumentOverrides = {
         rulesDocumentUrl: toOptionalString(requestBody.rulesDocumentUrl),
         rulesDocumentRaw: toOptionalString(requestBody.rulesDocumentRaw),
+      };
+
+      const queuedJob = await enqueueRegisterAgentJob({
+        config,
+        rulesDocumentOverrides,
       });
 
-      return res.status(201).json({
+      const queuedJobId = String(queuedJob.id);
+      const handoffMilestone = await waitForEnsHandoffMilestone(queuedJobId);
+      const fallbackEnsName = `${config.name}.${config.baseDomain}`;
+      const stage = handoffMilestone?.stage ?? "RUNNING";
+
+      await persistEnsHandoffPlaceholder(config, handoffMilestone, rulesDocumentOverrides);
+
+      return res.status(202).json({
         mode: "sdk-create-agent",
-        ...buildSuccessPayload(config, record),
+        handoff: "background-worker",
+        jobId: queuedJobId,
+        status: stage,
+        ensName: handoffMilestone?.ensName ?? fallbackEnsName,
+        agentId: handoffMilestone?.agentId,
+        registrationTxHash: handoffMilestone?.registrationTxHash,
+        ensTxHash: handoffMilestone?.ensTxHash,
+        pollUrl: `/api/register/jobs/${queuedJobId}`,
+        message:
+          stage === "ENS_REGISTERED"
+            ? "ENS domain registered. Remaining setup continues in background workers."
+            : stage === "ENS_DEFERRED_SELF_OWNED"
+              ? "Self-owned ENS mode detected. Remaining setup continues in background workers."
+              : "Agent setup is running in background workers.",
       });
     }
 
