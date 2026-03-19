@@ -396,7 +396,23 @@ function getWalletProvider() {
     return null;
   }
 
-  return window.ethereum ?? null;
+  const injected = window.ethereum;
+  if (!injected) {
+    return null;
+  }
+
+  const providers = Array.isArray(injected.providers)
+    ? injected.providers
+    : [injected];
+
+  const preferredProvider =
+    providers.find((provider) => provider?.isMetaMask) ||
+    providers.find((provider) => provider?.isCoinbaseWallet) ||
+    providers.find((provider) => provider?.isBraveWallet) ||
+    providers.find((provider) => typeof provider?.request === "function") ||
+    null;
+
+  return preferredProvider;
 }
 
 async function ensureSepoliaWallet(provider) {
@@ -600,16 +616,13 @@ export default function AgentRegistration() {
   }, []);
 
   useEffect(() => {
-    const provider = getWalletProvider();
-    if (!provider) {
-      return undefined;
-    }
-
     let active = true;
+    let provider = null;
+    let providerInitTimer;
 
-    async function syncExistingWallet() {
+    async function syncExistingWallet(selectedProvider) {
       try {
-        const accounts = await provider.request({ method: "eth_accounts" });
+        const accounts = await selectedProvider.request({ method: "eth_accounts" });
         if (!active || !Array.isArray(accounts)) {
           return;
         }
@@ -645,12 +658,51 @@ export default function AgentRegistration() {
       });
     }
 
-    syncExistingWallet();
-    provider.on?.("accountsChanged", handleAccountsChanged);
+    function bindProvider(nextProvider) {
+      if (!nextProvider) {
+        return;
+      }
+
+      if (provider === nextProvider) {
+        return;
+      }
+
+      provider?.removeListener?.("accountsChanged", handleAccountsChanged);
+      provider = nextProvider;
+      provider.on?.("accountsChanged", handleAccountsChanged);
+      void syncExistingWallet(provider);
+    }
+
+    function tryBindProvider() {
+      const detectedProvider = getWalletProvider();
+      if (!detectedProvider) {
+        return false;
+      }
+
+      bindProvider(detectedProvider);
+      return true;
+    }
+
+    const handleEthereumInitialized = () => {
+      if (!active) {
+        return;
+      }
+
+      void tryBindProvider();
+    };
+
+    if (!tryBindProvider()) {
+      window.addEventListener("ethereum#initialized", handleEthereumInitialized, { once: true });
+      providerInitTimer = window.setTimeout(handleEthereumInitialized, 1200);
+    }
 
     return () => {
       active = false;
-      provider.removeListener?.("accountsChanged", handleAccountsChanged);
+      if (providerInitTimer) {
+        window.clearTimeout(providerInitTimer);
+      }
+      window.removeEventListener("ethereum#initialized", handleEthereumInitialized);
+      provider?.removeListener?.("accountsChanged", handleAccountsChanged);
     };
   }, []);
 
@@ -1299,7 +1351,26 @@ export default function AgentRegistration() {
   };
 
   const connectWallet = async () => {
-    const provider = getWalletProvider();
+    let provider = getWalletProvider();
+    if (!provider && typeof window !== "undefined") {
+      await new Promise((resolve) => {
+        let fallbackTimer;
+
+        const handleInitialized = () => {
+          window.clearTimeout(fallbackTimer);
+          resolve();
+        };
+
+        window.addEventListener("ethereum#initialized", handleInitialized, { once: true });
+        fallbackTimer = window.setTimeout(() => {
+          window.removeEventListener("ethereum#initialized", handleInitialized);
+          resolve();
+        }, 1200);
+      });
+
+      provider = getWalletProvider();
+    }
+
     if (!provider) {
       setWallet({
         address: "",
@@ -2141,7 +2212,7 @@ export default function AgentRegistration() {
                       setError("");
                       setCurrentStep((current) => current + 1);
                     }}
-                    disabled={!readiness.ready}
+                    disabled={readiness.loading}
                   >
                     Continue
                   </button>
