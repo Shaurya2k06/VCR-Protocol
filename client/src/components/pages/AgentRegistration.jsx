@@ -868,11 +868,20 @@ export default function AgentRegistration() {
       return;
     }
 
+    const fallbackDomain =
+      form.domainMode === "managed"
+        ? form.selectedDomain
+        : form.customDomain.trim().toLowerCase();
+    const fallbackEns =
+      form.name && fallbackDomain
+        ? `${form.name}.${fallbackDomain}`
+        : "agent-name.vcrtcorp.eth";
+
     setRedirectingToExplorer(true);
 
     const params = new URLSearchParams({
       tab: "all",
-      ens: job.ensName || ensPreview,
+      ens: job.ensName || fallbackEns,
       provisioning: "1",
     });
 
@@ -881,7 +890,16 @@ export default function AgentRegistration() {
     }
 
     navigate(`/explorer?${params.toString()}`);
-  }, [ensPreview, job, jobId, navigate, redirectingToExplorer]);
+  }, [
+    form.customDomain,
+    form.domainMode,
+    form.name,
+    form.selectedDomain,
+    job,
+    jobId,
+    navigate,
+    redirectingToExplorer,
+  ]);
 
   useEffect(() => {
     if (
