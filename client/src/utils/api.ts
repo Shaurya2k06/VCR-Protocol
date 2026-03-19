@@ -1,6 +1,6 @@
 import type { DocumentVersion, StoredDoc } from "../types/document";
 
-export const API_BASE = import.meta.env.VITE_API_URL || "https://vcr-protocol-fawn.vercel.app";
+export const API_BASE = import.meta.env.VITE_API_URL || "https://vcr-protocol-ylgy.onrender.com";
 
 async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -11,10 +11,27 @@ async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T
     },
   });
 
-  const payload = await response.json().catch(() => null);
+  const contentType = response.headers.get("content-type") || "";
+  const isJson = contentType.includes("application/json");
+  const payload = isJson
+    ? await response.json().catch(() => null)
+    : await response.text().catch(() => "");
+
+  if (!isJson) {
+    const preview = typeof payload === "string"
+      ? payload.replace(/\s+/g, " ").slice(0, 120)
+      : "";
+    throw new Error(
+      `Unexpected response from API at ${path}: expected JSON but received ${contentType || "unknown content type"}. ` +
+      `Verify VITE_API_URL points to the backend service.${preview ? ` Response preview: ${preview}` : ""}`,
+    );
+  }
 
   if (!response.ok) {
-    const message = payload?.error || payload?.message || `Request failed: ${response.status}`;
+    const message =
+      (payload && typeof payload === "object" && "error" in payload && payload.error) ||
+      (payload && typeof payload === "object" && "message" in payload && payload.message) ||
+      `Request failed: ${response.status}`;
     throw new Error(message);
   }
 

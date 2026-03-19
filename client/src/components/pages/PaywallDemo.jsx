@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import { vcr } from "../../lib/api";
-
 function parseJsonHeader(value) {
   if (!value) return null;
   try {
@@ -154,7 +153,7 @@ export default function PaywallDemo() {
       setConfigLoading(true);
       try {
         const res = await fetch(
-          `${import.meta.env.VITE_API_URL || "https://vcr-protocol-fawn.vercel.app"}/api/demo/config`,
+          `${import.meta.env.VITE_API_URL || "https://vcr-protocol-ylgy.onrender.com"}/api/demo/config`,
         );
         const data = await res.json();
 
@@ -257,7 +256,7 @@ export default function PaywallDemo() {
     if (!currentEnsName) return;
     try {
       const res = await fetch(
-        `${import.meta.env.VITE_API_URL || "https://vcr-protocol-fawn.vercel.app"}/api/demo/logs/${encodeURIComponent(currentEnsName)}`,
+        `${import.meta.env.VITE_API_URL || "https://vcr-protocol-ylgy.onrender.com"}/api/demo/logs/${encodeURIComponent(currentEnsName)}`,
       );
       const data = await res.json();
       setLogs(Array.isArray(data.logs) ? data.logs : []);
@@ -301,7 +300,7 @@ export default function PaywallDemo() {
 
     try {
       const res = await fetch(
-        `${import.meta.env.VITE_API_URL || "https://vcr-protocol-fawn.vercel.app"}/api/demo/check`,
+        `${import.meta.env.VITE_API_URL || "https://vcr-protocol-ylgy.onrender.com"}/api/demo/check`,
         {
           method: "POST",
           headers: {
@@ -338,7 +337,7 @@ export default function PaywallDemo() {
 
     try {
       const res = await fetch(
-        `${import.meta.env.VITE_API_URL || "https://vcr-protocol-fawn.vercel.app"}/api/demo/settle`,
+        `${import.meta.env.VITE_API_URL || "https://vcr-protocol-ylgy.onrender.com"}/api/demo/settle`,
         {
           method: "POST",
           headers: {

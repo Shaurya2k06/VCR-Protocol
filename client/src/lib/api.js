@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_URL || "https://vcr-protocol-fawn.vercel.app";
+const API_BASE = import.meta.env.VITE_API_URL || "https://vcr-protocol-ylgy.onrender.com";
 
 async function api(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -15,6 +15,16 @@ async function api(path, options = {}) {
   const payload = isJson
     ? await response.json().catch(() => null)
     : await response.text().catch(() => "");
+
+  if (!isJson) {
+    const preview = typeof payload === "string"
+      ? payload.replace(/\s+/g, " ").slice(0, 120)
+      : "";
+    throw new Error(
+      `Unexpected response from API at ${path}: expected JSON but received ${contentType || "unknown content type"}. ` +
+      `Verify VITE_API_URL points to the backend service.${preview ? ` Response preview: ${preview}` : ""}`,
+    );
+  }
 
   if (!response.ok) {
     const message =
