@@ -11,6 +11,7 @@ import demoRouter from "./routes/demo.js";
 import walletRouter from "./routes/wallet.js";
 import ipfsRouter from "./routes/ipfsUpload.js";
 import documentsRouter from "./routes/documentRoutes.js";
+import createAgentRouter from "./api/createAgent.js";
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? "3001");
@@ -51,6 +52,7 @@ app.use("/api/demo", demoRouter);
 app.use("/api/wallet", walletRouter);
 app.use("/api/ipfs", ipfsRouter);
 app.use("/api/documents", documentsRouter);
+app.use(createAgentRouter);
 
 // ─── Global Error Handler ─────────────────────────────────────────────────────
 
@@ -72,15 +74,15 @@ async function start() {
   console.log("✅ MongoDB connected");
 
   app.listen(PORT, () => {
-    console.log(`\n🔐 VCR Protocol API running at http://localhost:${PORT}`);
-    console.log(`   Health: http://localhost:${PORT}/api/health`);
-    console.log(`   Policy: http://localhost:${PORT}/api/policy`);
-    console.log(`   Verify: http://localhost:${PORT}/api/verify`);
-    console.log(`   Register: http://localhost:${PORT}/api/register`);
-    console.log(`   Demo: http://localhost:${PORT}/api/demo`);
-    console.log(`   Wallet: http://localhost:${PORT}/api/wallet\n`);
-    console.log(`   IPFS: http://localhost:${PORT}/api/ipfs`);
-    console.log(`   Documents: http://localhost:${PORT}/api/documents\n`);
+    console.log(`\n🔐 VCR Protocol API running at http://localhost:3001`);
+    console.log(`   Health: http://localhost:3001/api/health`);
+    console.log(`   Policy: http://localhost:3001/api/policy`);
+    console.log(`   Verify: http://localhost:3001/api/verify`);
+    console.log(`   Register: http://localhost:3001/api/register`);
+    console.log(`   Demo: http://localhost:3001/api/demo`);
+    console.log(`   Wallet: http://localhost:3001/api/wallet\n`);
+    console.log(`   IPFS: http://localhost:3001/api/ipfs`);
+    console.log(`   Documents: http://localhost:3001/api/documents\n`);
   });
 }
 

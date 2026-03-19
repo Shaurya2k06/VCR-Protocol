@@ -90,7 +90,16 @@ export const Agent = mongoose.model<IAgent>("Agent", AgentSchema);
 // ─── Helper Functions ─────────────────────────────────────────────────────────
 
 export async function saveAgent(data: Omit<IAgent, keyof Document>): Promise<IAgent> {
-    return Agent.create(data);
+    return Agent.findOneAndUpdate(
+        { agentId: data.agentId },
+        { $set: data },
+        {
+            new: true,
+            upsert: true,
+            setDefaultsOnInsert: true,
+            runValidators: true,
+        }
+    ) as Promise<IAgent>;
 }
 
 export async function getAgentByChainId(agentId: number): Promise<IAgent | null> {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { vcr } from "../../lib/api";
 import { createStoredDocument } from "../../utils/api";
 import { createAgentDoc } from "../../utils/createDocJSON";
@@ -86,6 +86,191 @@ const JOB_STEP_LABELS = {
   ens: "Bind ENS records",
   finalize: "Finalize and persist agent",
 };
+
+function createDefaultJobSteps() {
+  return Object.entries(JOB_STEP_LABELS).map(([key, label]) => ({
+    key,
+    label,
+    status: "pending",
+  }));
+}
+
+function findStep(steps, key) {
+  return steps.find((step) => step.key === key);
+}
+
+function setActiveStep(steps, key) {
+  steps.forEach((step) => {
+    if (step.key === key) {
+      if (step.status === "pending") {
+        step.status = "active";
+      }
+      return;
+    }
+
+    if (step.status === "active") {
+      step.status = "completed";
+    }
+  });
+}
+
+function completeStep(steps, key) {
+  const step = findStep(steps, key);
+  if (step && step.status !== "failed") {
+    step.status = "completed";
+  }
+}
+
+function failCurrentStep(steps) {
+  const current =
+    steps.find((step) => step.status === "active") ||
+    steps.find((step) => step.status === "pending");
+
+  if (current) {
+    current.status = "failed";
+  }
+}
+
+function applyProgressMessage(steps, message) {
+  if (!message || typeof message !== "string") {
+    return;
+  }
+
+  if (message.includes("[1/5]")) {
+    setActiveStep(steps, "wallet");
+  } else if (message.includes("[2/5]")) {
+    completeStep(steps, "wallet");
+    setActiveStep(steps, "erc8004");
+  } else if (message.includes("[3/5]")) {
+    completeStep(steps, "erc8004");
+    setActiveStep(steps, "policy");
+  } else if (message.includes("[4/5]")) {
+    setActiveStep(steps, "policy");
+  } else if (message.includes("[5/5]")) {
+    completeStep(steps, "policy");
+    setActiveStep(steps, "ens");
+  } else if (message.includes("ENS records set tx:")) {
+    completeStep(steps, "ens");
+    setActiveStep(steps, "finalize");
+  } else if (message.includes("Deferring ENS binding")) {
+    completeStep(steps, "ens");
+    setActiveStep(steps, "finalize");
+  } else if (message.includes("Persisting agent record")) {
+    setActiveStep(steps, "finalize");
+  } else if (message.includes("created successfully")) {
+    steps.forEach((step) => {
+      step.status = "completed";
+    });
+  }
+}
+
+function buildStepsFromProgress({ logs = [], stage, state }) {
+  const steps = createDefaultJobSteps();
+
+  logs.forEach((entry) => {
+    applyProgressMessage(steps, entry);
+  });
+
+  if (stage === "ENS_REGISTERED" || stage === "ENS_DEFERRED_SELF_OWNED") {
+    completeStep(steps, "ens");
+    setActiveStep(steps, "finalize");
+  }
+
+  if (stage === "COMPLETED" || state === "completed") {
+    steps.forEach((step) => {
+      step.status = "completed";
+    });
+  }
+
+  if (stage === "FAILED" || state === "failed") {
+    failCurrentStep(steps);
+  }
+
+  return steps;
+}
+
+function normalizeLegacyJobResponse(response) {
+  return {
+    source: "legacy",
+    status: response?.status || "running",
+    stage: undefined,
+    ensName: undefined,
+    agentId: undefined,
+    registrationTxHash: undefined,
+    ensTxHash: undefined,
+    steps: Array.isArray(response?.steps) ? response.steps : createDefaultJobSteps(),
+    logs: Array.isArray(response?.logs) ? response.logs : [],
+    error: response?.error,
+    result: response?.result,
+  };
+}
+
+function normalizeBullMqJobResponse(response) {
+  const progress =
+    response?.progress && typeof response.progress === "object" ? response.progress : {};
+  const rawLogs = Array.isArray(progress.logs)
+    ? progress.logs.filter((entry) => typeof entry === "string")
+    : progress.lastLog
+      ? [progress.lastLog]
+      : [];
+
+  const logs = rawLogs.map((message, index) => ({
+    id: `${response.id || "job"}-${index}`,
+    message,
+    timestamp: new Date().toISOString(),
+  }));
+
+  const state = response?.state || "active";
+  const status =
+    state === "completed"
+      ? "succeeded"
+      : state === "failed"
+        ? "failed"
+        : "running";
+
+  return {
+    source: "bullmq",
+    status,
+    state,
+    stage: progress.stage,
+    ensName: progress.ensName,
+    agentId: progress.agentId,
+    registrationTxHash: progress.registrationTxHash,
+    ensTxHash: progress.ensTxHash,
+    steps: buildStepsFromProgress({
+      logs: rawLogs,
+      stage: progress.stage,
+      state,
+    }),
+    logs,
+    error: response?.failedReason,
+    result: response?.result,
+  };
+}
+
+function stageLabel(stage) {
+  if (!stage) {
+    return "Provisioning in progress.";
+  }
+
+  if (stage === "ENS_REGISTERED") {
+    return "ENS domain is ready. Finishing policy, records, and persistence in the background.";
+  }
+
+  if (stage === "ENS_DEFERRED_SELF_OWNED") {
+    return "Self-owned ENS handoff reached. Remaining setup continues in the background.";
+  }
+
+  if (stage === "COMPLETED") {
+    return "Agent creation finished.";
+  }
+
+  if (stage === "FAILED") {
+    return "Background worker reported a failure.";
+  }
+
+  return "Provisioning in progress.";
+}
 const SEPOLIA_HEX_CHAIN_ID = "0xaa36a7";
 const SEPOLIA_NETWORK_PARAMS = {
   chainId: SEPOLIA_HEX_CHAIN_ID,
@@ -169,6 +354,22 @@ function fileToDataUrl(file) {
     reader.onload = () => resolve(String(reader.result));
     reader.onerror = () => reject(new Error(`Failed to read ${file.name}`));
     reader.readAsDataURL(file);
+  });
+}
+
+function withPromiseTimeout(promise, timeoutMs, timeoutMessage) {
+  let timeoutId;
+
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = window.setTimeout(() => {
+      reject(new Error(timeoutMessage));
+    }, timeoutMs);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timeoutId) {
+      window.clearTimeout(timeoutId);
+    }
   });
 }
 
@@ -267,6 +468,7 @@ function StepPill({ index, step, active, complete }) {
 }
 
 export default function AgentRegistration() {
+  const navigate = useNavigate();
   const [currentStep, setCurrentStep] = useState(0);
   const [domainOptions, setDomainOptions] = useState(DEFAULT_DOMAIN_OPTIONS);
   const [tokenOptions, setTokenOptions] = useState(DEFAULT_TOKEN_OPTIONS);
@@ -459,6 +661,116 @@ export default function AgentRegistration() {
 
     let active = true;
 
+    async function finalizeBullMqCompletion(normalizedJob) {
+      if (!active) {
+        return;
+      }
+
+      if (normalizedJob?.result?.record) {
+        setSuccessResult(normalizedJob.result);
+        return;
+      }
+
+      const completedAgentId = Number(
+        normalizedJob?.result?.agentId ?? normalizedJob?.agentId,
+      );
+
+      if (!Number.isFinite(completedAgentId)) {
+        throw new Error("Agent creation completed but no agentId was returned by the job.");
+      }
+
+      let localRecord;
+      try {
+        const agentDetails = await vcr.getAgent(completedAgentId);
+        if (!active) {
+          return;
+        }
+        localRecord = agentDetails?.localRecord;
+      } catch {
+        localRecord = undefined;
+      }
+
+      if (localRecord) {
+        setAgentRecordFromDb(localRecord);
+      }
+
+      const fallbackBaseDomain =
+        form.domainMode === "managed"
+          ? form.selectedDomain
+          : form.customDomain.trim().toLowerCase();
+      const fallbackEnsName =
+        form.name && fallbackBaseDomain
+          ? `${form.name}.${fallbackBaseDomain}`
+          : "agent-name.vcrtcorp.eth";
+
+      const resolvedEnsName =
+        localRecord?.ensName ||
+        normalizedJob?.result?.ensName ||
+        normalizedJob?.ensName ||
+        fallbackEnsName;
+      const domainMode = localRecord?.registrationMode || form.domainMode;
+      const registrationTxHash =
+        localRecord?.registrationTxHash ||
+        normalizedJob?.result?.registrationTxHash ||
+        normalizedJob?.registrationTxHash ||
+        "";
+      const ensTxHash =
+        normalizedJob?.result?.ensTxHash || normalizedJob?.ensTxHash;
+      const policyUri = localRecord?.policyUri || "";
+      const ipfsLink =
+        localRecord?.rulesDocumentUrl ||
+        localRecord?.policyUri ||
+        (localRecord?.policyCid ? buildIpfsGatewayUrl(localRecord.policyCid) : "");
+
+      setSuccessResult({
+        record: {
+          ensName: resolvedEnsName,
+          agentId: localRecord?.agentId ?? completedAgentId,
+          walletAddress: localRecord?.agentWalletAddress || "",
+          policyUri,
+        },
+        ownership: {
+          creatorAddress: localRecord?.creatorAddress || wallet.address || "",
+          signingAddress: signingAddress || localRecord?.ownerAddress || "",
+          domainMode,
+          feeResponsibility:
+            domainMode === "managed"
+              ? "Managed domain: the backend signer pays the Sepolia ENS subdomain write gas."
+              : "Self-owned domain: your connected wallet pays ENS registration and write gas.",
+        },
+        links: {
+          ensApp: `${ensAppUrl.replace(/\/+$/, "")}/${resolvedEnsName}`,
+          registrationTx: registrationTxHash
+            ? `https://sepolia.etherscan.io/tx/${registrationTxHash}`
+            : `${ensAppUrl.replace(/\/+$/, "")}/${resolvedEnsName}`,
+          ensTx: ensTxHash
+            ? `https://sepolia.etherscan.io/tx/${ensTxHash}`
+            : undefined,
+          ipfs:
+            ipfsLink ||
+            `${ensAppUrl.replace(/\/+$/, "")}/${resolvedEnsName}`,
+          policyUri,
+        },
+        permissions: {
+          maxPerTxUsdc: form.maxPerTxUsdc,
+          dailyLimitUsdc: form.dailyLimitUsdc,
+          allowedRecipients: form.allowedRecipients,
+          allowedTokens:
+            localRecord?.supportedTokens?.length
+              ? localRecord.supportedTokens
+              : form.allowedTokens,
+          allowedChains:
+            localRecord?.supportedChains?.length
+              ? localRecord.supportedChains
+              : form.allowedChains,
+          allowedHours: form.timeRestricted
+            ? [Number(form.startHour), Number(form.endHour)]
+            : undefined,
+          description: form.description.trim() || undefined,
+        },
+      });
+    }
+
     async function refreshJob() {
       try {
         const response = await vcr.getRegistrationJob(jobId);
@@ -466,12 +778,40 @@ export default function AgentRegistration() {
           return;
         }
 
-        setJob(response);
-        if (response.status === "succeeded") {
-          setSuccessResult(response.result);
+        if (response?.source === "bullmq") {
+          const normalizedBullMqJob = normalizeBullMqJobResponse(response);
+          setJob(normalizedBullMqJob);
+
+          if (normalizedBullMqJob.status === "succeeded") {
+            await finalizeBullMqCompletion(normalizedBullMqJob);
+          }
+
+          if (normalizedBullMqJob.status === "failed") {
+            setError(normalizedBullMqJob.error || "Agent creation failed");
+          }
+
+          return;
         }
-        if (response.status === "failed") {
-          setError(response.error || "Agent creation failed");
+
+        const normalizedLegacyJob = normalizeLegacyJobResponse(response);
+        setJob(normalizedLegacyJob);
+
+        if (normalizedLegacyJob.status === "succeeded") {
+          const legacyAgentId = normalizedLegacyJob?.result?.record?.agentId;
+          if (Number.isFinite(Number(legacyAgentId))) {
+            try {
+              const agentDetails = await vcr.getAgent(Number(legacyAgentId));
+              if (active && agentDetails?.localRecord) {
+                setAgentRecordFromDb(agentDetails.localRecord);
+              }
+            } catch {}
+          }
+
+          setSuccessResult(normalizedLegacyJob.result);
+        }
+
+        if (normalizedLegacyJob.status === "failed") {
+          setError(normalizedLegacyJob.error || "Agent creation failed");
         }
       } catch (jobError) {
         if (!active) {
@@ -489,7 +829,26 @@ export default function AgentRegistration() {
       active = false;
       clearInterval(timer);
     };
-  }, [jobId, successResult]);
+  }, [
+    ensAppUrl,
+    form.allowedChains,
+    form.allowedRecipients,
+    form.allowedTokens,
+    form.customDomain,
+    form.dailyLimitUsdc,
+    form.description,
+    form.domainMode,
+    form.endHour,
+    form.maxPerTxUsdc,
+    form.name,
+    form.selectedDomain,
+    form.startHour,
+    form.timeRestricted,
+    jobId,
+    signingAddress,
+    successResult,
+    wallet.address,
+  ]);
 
   useEffect(() => {
     if (
@@ -1103,29 +1462,81 @@ export default function AgentRegistration() {
             },
       );
 
-      const cid = await uploadDocumentToIPFS(rulesPayload);
+      const cid = await withPromiseTimeout(
+        uploadDocumentToIPFS(rulesPayload),
+        45_000,
+        "Timed out while publishing rules document to IPFS.",
+      );
       setRulesDocCid(cid);
 
-      await createStoredDocument({
-        title: rulesTitle,
-        cid,
-      });
+      await withPromiseTimeout(
+        createStoredDocument({
+          title: rulesTitle,
+          cid,
+        }),
+        20_000,
+        "Timed out while saving rules document metadata.",
+      );
 
-      const response = await vcr.startRegistrationJob({
-        ...reviewPayload,
-        rulesDocumentUrl: buildIpfsGatewayUrl(cid),
-        rulesDocumentRaw: JSON.stringify(rulesPayload, null, 2),
-      });
+      const response = await withPromiseTimeout(
+        vcr.registerAgent({
+          ...reviewPayload,
+          rulesDocumentUrl: buildIpfsGatewayUrl(cid),
+          rulesDocumentRaw: JSON.stringify(rulesPayload, null, 2),
+        }),
+        210_000,
+        "Timed out waiting for ENS registration handoff.",
+      );
 
-      setJobId(response.jobId);
+      if (!response?.jobId) {
+        throw new Error("Registration job did not return a jobId.");
+      }
+
+      const initialState =
+        response.status === "COMPLETED"
+          ? "completed"
+          : response.status === "FAILED"
+            ? "failed"
+            : "active";
+
+      const shouldRedirectToExplorer =
+        response.status === "ENS_REGISTERED" || response.status === "COMPLETED";
+
+      if (shouldRedirectToExplorer) {
+        const ensForExplorer = encodeURIComponent(response.ensName || ensPreview);
+        navigate(`/explorer?tab=all&ens=${ensForExplorer}`);
+        return;
+      }
+
+      setJobId(String(response.jobId));
       setJob({
-        status: response.status,
-        steps: Object.entries(JOB_STEP_LABELS).map(([key, label]) => ({
-          key,
-          label,
-          status: key === "wallet" ? "active" : "pending",
-        })),
-        logs: [],
+        source: "bullmq",
+        state: initialState,
+        status:
+          initialState === "completed"
+            ? "succeeded"
+            : initialState === "failed"
+              ? "failed"
+              : "running",
+        stage: response.status,
+        ensName: response.ensName || ensPreview,
+        agentId: response.agentId,
+        registrationTxHash: response.registrationTxHash,
+        ensTxHash: response.ensTxHash,
+        steps: buildStepsFromProgress({
+          logs: [],
+          stage: response.status,
+          state: initialState,
+        }),
+        logs: response.message
+          ? [
+              {
+                id: `${response.jobId}-handoff`,
+                message: response.message,
+                timestamp: new Date().toISOString(),
+              },
+            ]
+          : [],
       });
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Failed to create agent");
@@ -1758,8 +2169,23 @@ export default function AgentRegistration() {
                   <h2>Live backend checklist</h2>
                 </div>
                 <p className="wizard-step-counter">
-                  {job?.status === "failed" ? "Needs attention" : "Running"}
+                  {job?.status === "failed"
+                    ? "Needs attention"
+                    : job?.status === "succeeded"
+                      ? "Finalizing"
+                      : "Running"}
                 </p>
+              </div>
+
+              <div className="wizard-review-grid" style={{ marginBottom: 16 }}>
+                <div className="wizard-review-item">
+                  <span>ENS milestone</span>
+                  <strong className="mono">{job?.ensName || ensPreview}</strong>
+                </div>
+                <div className="wizard-review-item wide">
+                  <span>Worker status</span>
+                  <strong>{stageLabel(job?.stage)}</strong>
+                </div>
               </div>
 
               <div className="wizard-job-steps">

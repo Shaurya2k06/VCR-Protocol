@@ -21,6 +21,10 @@ const optional: string[] = [
     "DEMO_RECIPIENT_ADDRESS",
     "VCR_REGISTRY_ADDRESS",
     "BITGO_WEBHOOK_SECRET",
+    "REDIS_URL",
+    "FILEVERSE_API_URL",
+    "FILEVERSE_API_KEY",
+    "ENS_HANDOFF_WAIT_TIMEOUT_MS",
 ];
 
 console.log("\n🔐 VCR Protocol — Environment Validation\n");
