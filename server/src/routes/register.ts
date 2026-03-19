@@ -965,28 +965,38 @@ router.post("/", async (req, res) => {
       });
 
       const queuedJobId = String(queuedJob.id);
-      const handoffMilestone = await waitForEnsHandoffMilestone(queuedJobId);
       const fallbackEnsName = `${config.name}.${config.baseDomain}`;
-      const stage = handoffMilestone?.stage ?? "RUNNING";
+      const initialProgress = normalizeRegisterAgentProgress(queuedJob.progress);
+      const stage = initialProgress?.stage ?? "QUEUED";
 
-      await persistEnsHandoffPlaceholder(config, handoffMilestone, rulesDocumentOverrides);
+      void waitForEnsHandoffMilestone(queuedJobId)
+        .then((handoffMilestone) =>
+          persistEnsHandoffPlaceholder(config, handoffMilestone, rulesDocumentOverrides),
+        )
+        .catch((error) => {
+          console.warn(
+            `[register] ENS handoff placeholder skipped for job ${queuedJobId}: ${(error as Error).message}`,
+          );
+        });
 
       return res.status(202).json({
         mode: "sdk-create-agent",
         handoff: "background-worker",
         jobId: queuedJobId,
         status: stage,
-        ensName: handoffMilestone?.ensName ?? fallbackEnsName,
-        agentId: handoffMilestone?.agentId,
-        registrationTxHash: handoffMilestone?.registrationTxHash,
-        ensTxHash: handoffMilestone?.ensTxHash,
+        ensName: initialProgress?.ensName ?? fallbackEnsName,
+        agentId: initialProgress?.agentId,
+        registrationTxHash: initialProgress?.registrationTxHash,
+        ensTxHash: initialProgress?.ensTxHash,
         pollUrl: `/api/register/jobs/${queuedJobId}`,
         message:
           stage === "ENS_REGISTERED"
             ? "ENS domain registered. Remaining setup continues in background workers."
             : stage === "ENS_DEFERRED_SELF_OWNED"
               ? "Self-owned ENS mode detected. Remaining setup continues in background workers."
-              : "Agent setup is running in background workers.",
+              : stage === "QUEUED"
+                ? "Agent job queued. Live worker logs will appear shortly."
+                : "Agent setup is running in background workers.",
       });
     }
 

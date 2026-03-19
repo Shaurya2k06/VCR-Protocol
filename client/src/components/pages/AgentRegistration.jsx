@@ -253,6 +253,10 @@ function stageLabel(stage) {
     return "Provisioning in progress.";
   }
 
+  if (stage === "QUEUED") {
+    return "Queued for worker pickup. Live logs will start shortly.";
+  }
+
   if (stage === "ENS_REGISTERED") {
     return "ENS domain is ready. Finishing policy, records, and persistence in the background.";
   }
@@ -524,6 +528,7 @@ export default function AgentRegistration() {
   const [error, setError] = useState("");
   const [jobId, setJobId] = useState("");
   const [job, setJob] = useState(null);
+  const [redirectingToExplorer, setRedirectingToExplorer] = useState(false);
   const [successResult, setSuccessResult] = useState(null);
   const [agentRecordFromDb, setAgentRecordFromDb] = useState(null);
   const [rulesDocTitle, setRulesDocTitle] = useState("");
@@ -900,6 +905,52 @@ export default function AgentRegistration() {
     signingAddress,
     successResult,
     wallet.address,
+  ]);
+
+  useEffect(() => {
+    if (redirectingToExplorer || !jobId || !job) {
+      return;
+    }
+
+    const shouldRedirectToExplorer =
+      job.stage === "ENS_REGISTERED" ||
+      (job.stage === "COMPLETED" && Boolean(job.ensTxHash));
+
+    if (!shouldRedirectToExplorer) {
+      return;
+    }
+
+    const fallbackDomain =
+      form.domainMode === "managed"
+        ? form.selectedDomain
+        : form.customDomain.trim().toLowerCase();
+    const fallbackEns =
+      form.name && fallbackDomain
+        ? `${form.name}.${fallbackDomain}`
+        : "agent-name.vcrtcorp.eth";
+
+    setRedirectingToExplorer(true);
+
+    const params = new URLSearchParams({
+      tab: "all",
+      ens: job.ensName || fallbackEns,
+      provisioning: "1",
+    });
+
+    if (Number.isFinite(Number(job.agentId))) {
+      params.set("agentId", String(job.agentId));
+    }
+
+    navigate(`/explorer?${params.toString()}`);
+  }, [
+    form.customDomain,
+    form.domainMode,
+    form.name,
+    form.selectedDomain,
+    job,
+    jobId,
+    navigate,
+    redirectingToExplorer,
   ]);
 
   useEffect(() => {
@@ -1435,6 +1486,7 @@ export default function AgentRegistration() {
     setRulesDocTouched(false);
     setRulesDocCid("");
     setRulesDocPublishing(false);
+    setRedirectingToExplorer(false);
     setJobId("");
     setJob(null);
     setProfileUpload({
@@ -1469,6 +1521,7 @@ export default function AgentRegistration() {
     setRecipientInput("");
     setCurrentStep(0);
     setError("");
+    setRedirectingToExplorer(false);
     setJobId("");
     setJob(null);
     setSuccessResult(null);
@@ -1519,6 +1572,7 @@ export default function AgentRegistration() {
 
   const submit = async () => {
     setError("");
+    setRedirectingToExplorer(false);
     setRulesDocPublishing(true);
 
     try {
@@ -1569,15 +1623,6 @@ export default function AgentRegistration() {
           : response.status === "FAILED"
             ? "failed"
             : "active";
-
-      const shouldRedirectToExplorer =
-        response.status === "ENS_REGISTERED" || response.status === "COMPLETED";
-
-      if (shouldRedirectToExplorer) {
-        const ensForExplorer = encodeURIComponent(response.ensName || ensPreview);
-        navigate(`/explorer?tab=all&ens=${ensForExplorer}`);
-        return;
-      }
 
       setJobId(String(response.jobId));
       setJob({

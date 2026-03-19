@@ -38,6 +38,8 @@ function ArchNode({ data }) {
     >
       <Handle type="target" position={Position.Top} style={{ background: d.color, width: 10, height: 10, border: '2px solid #000' }} />
       <Handle type="target" position={Position.Left} id="left" style={{ background: d.color, width: 10, height: 10, border: '2px solid #000' }} />
+      <Handle type="target" position={Position.Bottom} id="bottom" style={{ background: d.color, width: 10, height: 10, border: '2px solid #000' }} />
+      <Handle type="source" position={Position.Top} id="top" style={{ background: d.color, width: 10, height: 10, border: '2px solid #000' }} />
       <Handle type="source" position={Position.Bottom} style={{ background: d.color, width: 10, height: 10, border: '2px solid #000' }} />
       <Handle type="source" position={Position.Right} id="right" style={{ background: d.color, width: 10, height: 10, border: '2px solid #000' }} />
 
