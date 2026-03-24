@@ -180,9 +180,9 @@ export default function Landing() {
               <Link to="/register" className="nb-btn nb-btn--primary" style={{ fontSize: '1.2rem', padding: '18px 36px' }}>
                 Launch Demo
               </Link>
-              <button className="nb-btn" style={{ fontSize: '1.2rem', padding: '18px 36px', background: '#FFFFFF' }}>
+              <Link to="/documentation" className="nb-btn" style={{ fontSize: '1.2rem', padding: '18px 36px', background: '#FFFFFF' }}>
                 Read Documentation
-              </button>
+              </Link>
             </div>
           </div>
         </div>
