@@ -128,8 +128,8 @@ export default function Documentation() {
         const element = document.getElementById(section.id);
         if (element) {
           const rect = element.getBoundingClientRect();
-          // If the top of the element is above or close to the top of the viewport
-          if (rect.top <= 160) {
+          // Trigger when the element gets near the top of the viewport (under the header)
+          if (rect.top <= 250) {
             newActiveSection = section.id;
           }
         }
@@ -138,9 +138,10 @@ export default function Documentation() {
       setActiveSection(newActiveSection);
     };
 
-    window.addEventListener('scroll', handleScroll);
+    // useCapture = true ensures we catch scroll events from ANY scrolling container (e.g. body/html)
+    window.addEventListener('scroll', handleScroll, true);
     handleScroll(); // Call once on mount
-    return () => window.removeEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll, true);
   }, []);
 
   return (
