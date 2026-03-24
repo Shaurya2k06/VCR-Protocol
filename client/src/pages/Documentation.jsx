@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
 /* ================================================================== */
 /*  VCR Protocol SDK — Documentation Page                              */
@@ -118,6 +118,31 @@ function ContractTable({ rows }) {
 }
 
 export default function Documentation() {
+  const [activeSection, setActiveSection] = useState('overview');
+
+  useEffect(() => {
+    const handleScroll = () => {
+      let newActiveSection = SECTIONS[0].id;
+      
+      for (const section of SECTIONS) {
+        const element = document.getElementById(section.id);
+        if (element) {
+          const rect = element.getBoundingClientRect();
+          // If the top of the element is above or close to the top of the viewport
+          if (rect.top <= 160) {
+            newActiveSection = section.id;
+          }
+        }
+      }
+      
+      setActiveSection(newActiveSection);
+    };
+
+    window.addEventListener('scroll', handleScroll);
+    handleScroll(); // Call once on mount
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
+
   return (
     <div style={{ background: 'var(--nb-bg)', color: 'var(--nb-ink)', minHeight: '100vh', position: 'relative' }}>
       {/* Grid overlay */}
@@ -130,20 +155,33 @@ export default function Documentation() {
             SDK Reference
           </div>
           <nav style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {SECTIONS.map(s => (
-              <a key={s.id} href={`#${s.id}`} style={{ textDecoration: 'none', color: 'var(--nb-ink)', fontFamily: 'var(--font-mono)', fontSize: '0.82rem', fontWeight: 600, padding: '8px 14px', borderLeft: '3px solid transparent', transition: 'all 0.1s' }}
-                onMouseEnter={e => { e.currentTarget.style.borderLeftColor = 'var(--nb-accent)'; e.currentTarget.style.background = '#fff'; }}
-                onMouseLeave={e => { e.currentTarget.style.borderLeftColor = 'transparent'; e.currentTarget.style.background = 'transparent'; }}
-              >
-                {s.label}
-              </a>
-            ))}
+            {SECTIONS.map(s => {
+              const isActive = activeSection === s.id;
+              return (
+                <a key={s.id} href={`#${s.id}`} style={{ 
+                  textDecoration: 'none', 
+                  color: isActive ? 'var(--nb-bg)' : 'var(--nb-ink)', 
+                  backgroundColor: isActive ? 'var(--nb-ink)' : 'transparent',
+                  fontFamily: 'var(--font-mono)', 
+                  fontSize: '0.82rem', 
+                  fontWeight: 600, 
+                  padding: '8px 14px', 
+                  borderLeft: `3px solid ${isActive ? 'var(--nb-accent)' : 'transparent'}`, 
+                  transition: 'all 0.1s' 
+                }}
+                  onMouseEnter={e => { if (!isActive) { e.currentTarget.style.borderLeftColor = 'var(--nb-accent)'; e.currentTarget.style.background = '#fff'; } }}
+                  onMouseLeave={e => { if (!isActive) { e.currentTarget.style.borderLeftColor = 'transparent'; e.currentTarget.style.background = 'transparent'; } }}
+                >
+                  {s.label}
+                </a>
+              );
+            })}
           </nav>
-          <div style={{ marginTop: 32, padding: '16px', background: '#fff', border: '3px solid var(--nb-ink)', boxShadow: '4px 4px 0 var(--nb-ink)' }}>
+          <a href="https://www.npmjs.com/package/@shaurya2k06/vcrsdk" target="_blank" rel="noreferrer" style={{ textDecoration: 'none', color: 'inherit', display: 'block', marginTop: 32, padding: '16px', background: '#fff', border: '3px solid var(--nb-ink)', boxShadow: '4px 4px 0 var(--nb-ink)', cursor: 'pointer', transition: 'transform 0.1s, box-shadow 0.1s' }} onMouseEnter={e => { e.currentTarget.style.transform = 'translate(-2px, -2px)'; e.currentTarget.style.boxShadow = '6px 6px 0 var(--nb-ink)'; }} onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = '4px 4px 0 var(--nb-ink)'; }}>
             <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--nb-accent2)', marginBottom: 8 }}>Package</div>
             <code style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', fontWeight: 600 }}>@shaurya2k06/vcrsdk</code>
             <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.72rem', color: '#9ca3af', marginTop: 6 }}>v1.1.0 · MIT License</div>
-          </div>
+          </a>
         </aside>
 
         {/* — Main Content — */}
