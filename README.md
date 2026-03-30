@@ -1,6 +1,6 @@
 # VCR Protocol — Verifiable Capability Routing
 
-**Policy-Bound Agent Wallets: The Missing Layer Between ERC-8004, ENSIP-25, and x402**
+**Policy-Bound Agent Wallets: The Missing Layer Between ERC-8004, ENSIP-25, and x402** <br/>
 **🏆 Won Triple Track across BitGo, ENS, and Base during EthMumbai 2026**
 
 
