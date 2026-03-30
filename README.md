@@ -1,6 +1,8 @@
 # VCR Protocol — Verifiable Capability Routing
 
 **Policy-Bound Agent Wallets: The Missing Layer Between ERC-8004, ENSIP-25, and x402**
+**🏆 Won Triple Track across BitGo, ENS, and Base during EthMumbai 2026**
+
 
 VCR constrains how autonomous agents can spend funds. ERC-8004 gives agents on-chain identity, x402 gives them HTTP-native payment rails — VCR fills the gap with verifiable spending policies.
 
