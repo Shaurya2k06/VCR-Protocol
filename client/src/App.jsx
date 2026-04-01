@@ -8,6 +8,7 @@ import CreateAgentDoc from "./pages/CreateAgentDoc";
 import ViewAgentDoc from "./pages/ViewAgentDoc";
 import ViewDocPage from "./pages/ViewDocPage";
 import EditDocPage from "./pages/EditDocPage";
+import Documentation from "./pages/Documentation";
 
 export default function App() {
   return (
@@ -19,6 +20,7 @@ export default function App() {
         <Route path="/demo" element={<Demos />} />
         <Route path="/demos" element={<Demos />} />
         <Route path="/explorer" element={<PolicyExplorer />} />
+        <Route path="/documentation" element={<Documentation />} />
         <Route path="/doc/create" element={<CreateAgentDoc />} />
         <Route path="/doc/create-agent" element={<CreateAgentDoc />} />
         <Route path="/doc/id/:id" element={<ViewDocPage />} />

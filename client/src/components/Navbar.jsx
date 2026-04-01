@@ -6,7 +6,7 @@ export default function Navbar() {
     { to: "/register", label: "Register" },
     { to: "/demo", label: "demos" },
     { to: "/explorer", label: "Explorer" },
-    { to: "/doc/create", label: "Docs" }
+    { to: "/documentation", label: "Docs" }
   ];
 
   return (
