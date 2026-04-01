@@ -1,0 +1,251 @@
+{
+  "name": "vcr-protocol-ui",
+  "description": "Premium dark-mode protocol landing + dashboard UI for VCR (Verifiable Capability Routing), combining Web3 infrastructure visualization with high-conversion SaaS design inspired by ascendmarketing.xyz",
+
+  "product_context": {
+    "product_name": "VCR Protocol",
+    "tagline": "Policy-Bound Agent Wallets for Autonomous Payments",
+    "core_concept": "A verification layer between agent identity (ERC-8004) and payments (x402) that enforces programmable spending constraints via IPFS + ENS",
+    "target_users": [
+      "AI agent developers",
+      "Web3 protocol engineers",
+      "infra hackers",
+      "hackathon builders"
+    ]
+  },
+
+  "design_system": {
+    "theme": "dark",
+    "style_keywords": [
+      "premium infra UI",
+      "cyberpunk subtle",
+      "developer-first",
+      "protocol dashboard",
+      "high signal low noise",
+      "clean but powerful"
+    ],
+
+    "colors": {
+      "background": "#050508",
+      "surface": "#0D0D12",
+      "primary": "#7C5CFF",
+      "secondary": "#A855F7",
+      "accent": "#22D3EE",
+      "success": "#22C55E",
+      "warning": "#F59E0B",
+      "error": "#EF4444",
+      "text_primary": "#FFFFFF",
+      "text_secondary": "#9CA3AF",
+      "border": "#1A1A22",
+      "gradient_primary": "linear-gradient(135deg, #7C5CFF, #A855F7)"
+    },
+
+    "typography": {
+      "font_family": "Inter, sans-serif",
+      "heading_weight": 700,
+      "mono_font": "JetBrains Mono, monospace",
+      "scale": {
+        "hero": "text-5xl md:text-7xl",
+        "h1": "text-4xl",
+        "h2": "text-3xl",
+        "h3": "text-xl",
+        "body": "text-base"
+      }
+    }
+  },
+
+  "layout": {
+    "sections": [
+      "Navbar",
+      "Hero",
+      "Architecture Flow",
+      "How VCR Works",
+      "Policy Schema Showcase",
+      "Developer Features",
+      "Live Demo / Playground",
+      "CTA",
+      "Footer"
+    ]
+  },
+
+  "hero_section": {
+    "headline": "Control What Your Agents Can Spend",
+    "subheadline": "VCR adds a verifiable policy layer between ERC-8004 identity and x402 payments",
+    "cta_primary": "Start Building",
+    "cta_secondary": "View Docs",
+    "background": "animated gradient + subtle grid + glow blobs",
+    "visual": "abstract network graph or protocol diagram"
+  },
+
+  "architecture_section": {
+    "title": "The Missing Layer in Agent Payments",
+    "description": "VCR connects identity, policy, and payments into a verifiable execution pipeline",
+    "visualization": {
+      "type": "flow-diagram",
+      "library": "@xyflow/react",
+      "nodes": [
+        "Agent Owner",
+        "IPFS Policy",
+        "ENS Records",
+        "ERC-8004 Identity",
+        "VCR Verifier",
+        "x402 Payment",
+        "Service"
+      ],
+      "edges": [
+        "Owner → Policy",
+        "Policy → ENS",
+        "ENS → Verifier",
+        "Verifier → Payment",
+        "Payment → Service"
+      ]
+    }
+  },
+
+  "how_it_works": {
+    "steps": [
+      {
+        "title": "Define Policy",
+        "description": "Create JSON constraints for agent spending",
+        "code_snippet": true
+      },
+      {
+        "title": "Pin to IPFS",
+        "description": "Store policy immutably and get CID"
+      },
+      {
+        "title": "Link via ENS",
+        "description": "Set vcr.policy text record"
+      },
+      {
+        "title": "Verify Before Payment",
+        "description": "Run canAgentSpend() before x402 execution"
+      }
+    ]
+  },
+
+  "policy_schema_section": {
+    "title": "Policy as Code",
+    "description": "Define precise constraints on agent behavior",
+    "code_block": {
+      "language": "json",
+      "content": "VCR policy schema with maxTransaction, dailyLimit, allowedRecipients, allowedTokens, allowedChains"
+    },
+    "style": "glassmorphism code card with glow border"
+  },
+
+  "features": [
+    {
+      "title": "Verifiable Constraints",
+      "description": "Any service can independently validate agent permissions",
+      "icon": "shield"
+    },
+    {
+      "title": "IPFS-backed Policies",
+      "description": "Immutable, decentralized storage",
+      "icon": "database"
+    },
+    {
+      "title": "ENS Integration",
+      "description": "Human-readable identity linking",
+      "icon": "link"
+    },
+    {
+      "title": "x402 Native",
+      "description": "Works seamlessly with HTTP crypto payments",
+      "icon": "credit-card"
+    }
+  ],
+
+  "developer_section": {
+    "title": "Built for Developers",
+    "features": [
+      "TypeScript-first SDK",
+      "viem integration",
+      "Helia + Pinata support",
+      "BitGo policy enforcement"
+    ],
+    "code_example": {
+      "language": "typescript",
+      "content": "canAgentSpend() usage example"
+    }
+  },
+
+  "demo_section": {
+    "title": "Try It Live",
+    "components": [
+      "input: ENS name",
+      "input: amount",
+      "input: recipient",
+      "button: Verify",
+      "output: allowed/denied + reason"
+    ],
+    "style": "interactive card with neon border"
+  },
+
+  "components": {
+    "navbar": {
+      "style": "blurred, sticky, minimal",
+      "links": ["Docs", "Explorer", "Demo", "GitHub"]
+    },
+
+    "cards": {
+      "style": "dark + border + hover glow",
+      "hover": "translateY(-5px) + shadow glow"
+    },
+
+    "buttons": {
+      "primary": "gradient + glow",
+      "secondary": "outline + hover fill"
+    }
+  },
+
+  "animations": {
+    "library": "framer-motion",
+    "patterns": [
+      "fade-up on scroll",
+      "staggered children",
+      "hover scale",
+      "glow pulse"
+    ]
+  },
+
+  "interaction_patterns": {
+    "hover": [
+      "cards lift",
+      "buttons glow",
+      "links color shift"
+    ],
+    "scroll": [
+      "sections fade in",
+      "diagram animates progressively"
+    ]
+  },
+
+  "content_style": {
+    "tone": "technical, confident, protocol-level",
+    "writing_patterns": [
+      "short high-impact statements",
+      "explain architecture clearly",
+      "avoid fluff",
+      "focus on problem-solution clarity"
+    ]
+  },
+
+  "tech_stack": {
+    "frontend": "React + Tailwind CSS",
+    "animations": "Framer Motion",
+    "diagram": "@xyflow/react",
+    "web3": "viem",
+    "state": "@tanstack/react-query"
+  },
+
+  "constraints": {
+    "avoid": [
+      "generic SaaS wording",
+      "marketing fluff",
+      "light themes",
+      "overly complex UI"
+    ]
+  }
+}
